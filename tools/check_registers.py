@@ -30,6 +30,10 @@ erzeugt, schlimmer ist als keiner:
     Fassungen derselben Entscheidung, keine Doppeldefinition. Erkannt am
     Revisionsmarker; welche Ueberschriften so gewertet wurden, steht im Bericht.
     Nur zwei Ueberschriften OHNE Revisionsmarker sind ein Befund.
+  * **Fortschreibungsregister.** Manche Projekte fuehren je ID MEHRERE Zeilen und
+    lassen die letzte gelten — eine bewusste Bauform, kein Versehen. Solche
+    Register tragen `"multi_row": true`; dann ist die Mehrfachzeile keine
+    Doppeldefinition, und der Bericht nennt, wie viele Fassungen es gibt.
   * **Fremde IDs.** `R-213` stammt aus dem Assay und nicht aus dem Risk Register
     dieses Repos — das ID-Muster kann das nicht wissen. Solche IDs stehen mit
     Herkunft in `.devos.json` unter `external_ids` und werden als *auswaertig
@@ -73,10 +77,11 @@ def ist_id(token: str, cfg: Config) -> bool:
         return False
 
 
-def definitionen(root: Path, cfg: Config) -> tuple[dict, list[str], list[str]]:
-    """ID -> [(Pfad, Zeile, ist_revision)], Formfehler, Revisionshinweise."""
+def definitionen(root: Path, cfg: Config) -> tuple[dict, list[str], list[str], list[str]]:
+    """ID -> [(Pfad, Zeile, ist_revision)], Formfehler, Revisionen, Formhinweise."""
     gefunden: dict[str, list[tuple[str, int, bool]]] = {}
     formfehler: list[str] = []
+    formhinweise: list[str] = []
     revisionen: list[str] = []
     for pre, spec in cfg.registers.items():
         rel = spec.get("path")
@@ -99,6 +104,7 @@ def definitionen(root: Path, cfg: Config) -> tuple[dict, list[str], list[str]]:
                 if not rest.lstrip("—- "):
                     formfehler.append(f"{rel}:{i}: Abschnitt {m.group(1)} hat keinen Titel")
         else:
+            mehrzeilig = bool(spec.get("multi_row"))
             spalten = None
             for i, l in enumerate(zeilen, 1):
                 z = l.strip()
@@ -113,19 +119,34 @@ def definitionen(root: Path, cfg: Config) -> tuple[dict, list[str], list[str]]:
                 erste = felder[0].strip() if felder else ""
                 if not ist_id(erste, cfg) or praefix(erste) != pre:
                     continue
-                gefunden.setdefault(erste, []).append((rel, i, False))
-                if len(felder) != spalten:
-                    formfehler.append(f"{rel}:{i}: Zeile {erste} hat {len(felder)} Spalten, "
-                                      f"die Kopfzeile {spalten}")
-    return gefunden, formfehler, revisionen
+                gefunden.setdefault(erste, []).append((rel, i, mehrzeilig))
+                # Zu WENIGE Spalten ist ein Befund: eine abgeschnittene Zeile
+                # verliert Inhalt, und welcher, sieht man ihr nicht an.
+                # Zu VIELE ist ein Hinweis: ein angehaengter Vermerk verliert
+                # nichts, und die ID steht weiterhin in Spalte 1 — jeder Leser,
+                # der Zeilen ueber `| ID |` findet, findet sie unveraendert.
+                # Beides gleich zu behandeln hiesse, eine bewusste Bauform als
+                # Mangel zu melden.
+                if len(felder) < spalten:
+                    formfehler.append(f"{rel}:{i}: Zeile {erste} hat nur {len(felder)} "
+                                      f"Spalten, die Kopfzeile {spalten} — es fehlt Inhalt")
+                elif len(felder) > spalten:
+                    formhinweise.append(f"{rel}:{i}: Zeile {erste} traegt "
+                                        f"{len(felder) - spalten} Spalte(n) mehr als die "
+                                        "Kopfzeile (angehaengter Vermerk)")
+    return gefunden, formfehler, revisionen, formhinweise
 
 
 def referenzen(root: Path, cfg: Config) -> dict[str, list[tuple[str, int]]]:
     """ID -> [(Pfad, Zeile)] ueber alle Textdateien des Projekts."""
+    import fnmatch
     muster = re.compile(cfg.id_pattern)
     out: dict[str, list[tuple[str, int]]] = {}
     for f in sorted(root.rglob("*")):
         if not f.is_file() or any(t in f.parts for t in UEBERSPRINGEN):
+            continue
+        rel_pruef = str(f.relative_to(root))
+        if any(fnmatch.fnmatch(rel_pruef, m) for m in cfg.ignore_paths):
             continue
         if f.suffix.lower() not in (".md", ".txt", ".json", ".yaml", ".yml", ".py", ".rst"):
             continue
@@ -158,7 +179,7 @@ def main() -> int:
               file=sys.stderr)
         return 2
 
-    defs, formfehler, revisionen = definitionen(root, cfg)
+    defs, formfehler, revisionen, formhinweise = definitionen(root, cfg)
     refs = referenzen(root, cfg)
     extern = cfg.external_ids
 
@@ -215,6 +236,7 @@ def main() -> int:
                           "nie_referenziert": nie,
                           "mehrfassungen": sorted(mehrfassung),
                           "auswaertig": sorted(auswaertig),
+                          "formhinweise": formhinweise,
                           "register": je_register}, ensure_ascii=False, indent=2))
         return 1 if befunde else 0
 
@@ -225,8 +247,12 @@ def main() -> int:
         print(f"  nie referenziert : {len(nie)} — zulaessig: "
               f"{', '.join(nie[:8])}{' …' if len(nie) > 8 else ''}")
     if mehrfassung:
-        print(f"  Mehrfassungen    : {len(mehrfassung)} — zulaessig, als Revision erkannt: "
+        print(f"  Mehrfassungen    : {len(mehrfassung)} — zulaessig, als Revision bzw. "
+              f"Fortschreibung erkannt: "
               f"{', '.join(sorted(mehrfassung)[:8])}{' …' if len(mehrfassung) > 8 else ''}")
+    if formhinweise:
+        print(f"  Formhinweise     : {len(formhinweise)} — zulaessig, angehaengte Vermerke: "
+              f"{formhinweise[0][:70]}{' …' if len(formhinweise) > 1 else ''}")
     if auswaertig:
         print(f"  auswaertig       : {len(auswaertig)} — laut .devos.json fremd definiert: "
               + ", ".join(f"{k} ({extern[k][:40]})" for k in sorted(auswaertig)[:4]))

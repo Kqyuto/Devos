@@ -166,6 +166,9 @@ def pruefe_projekt(b: Bericht, root: str, tests: str | None) -> Config:
         shutil.rmtree(wt, ignore_errors=True)
 
     # Testkommando: ohne einen gruenen Lauf endet JEDE Lieferung bei CHANGES_REQUIRED
+    woher = ""
+    if not tests and cfg.tests:
+        tests, woher = cfg.tests, " (aus .devos.json)"
     if not tests:
         b.add("Testkommando", FEHLT, "--tests nicht angegeben",
               "Ohne Testnachweis ist `tests.ran=false` und das Gate schliesst PASS aus — "
@@ -174,10 +177,10 @@ def pruefe_projekt(b: Bericht, root: str, tests: str | None) -> Config:
     else:
         p = subprocess.run(["bash", "-lc", tests], cwd=root, capture_output=True, text=True)
         if p.returncode == 0:
-            b.add("Testkommando", OK, f"`{tests[:50]}` → Exit 0")
+            b.add("Testkommando", OK, f"`{tests[:50]}`{woher} → Exit 0")
         else:
             b.add("Testkommando", KAPUTT,
-                  f"`{tests[:50]}` → Exit {p.returncode}: "
+                  f"`{tests[:50]}`{woher} → Exit {p.returncode}: "
                   f"{(p.stdout + p.stderr).strip().splitlines()[-1][:90] if (p.stdout + p.stderr).strip() else ''}",
                   "Erst gruen bekommen. Ein roter Test laesst den Reviewer gar nicht erst rufen")
 

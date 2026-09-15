@@ -4,7 +4,7 @@ Dieses Dokument trennt drei Dinge, die sonst ineinanderlaufen: **geprüft an ech
 **geprüft gegen eine Attrappe** und **überhaupt nicht geprüft**. Die zweite Kategorie ist die
 gefährliche — sie sieht in einem grünen Testlauf genauso aus wie die erste.
 
-Stand: Eigentest `176 von 176`, `tools/reproduce_findings.py` Exit 0.
+Stand: Eigentest `182 von 182`, `tools/reproduce_findings.py` Exit 0.
 
 **Der kürzeste Weg von hier: [`START.md`](START.md).** Dieses Dokument ist die
 Begründung dahinter — was belegt ist und was nicht.
@@ -105,11 +105,29 @@ aus der es den Nachweis der Familientrennung liest. Klein, von außen prüfbar, 
 das, worauf das Verfahren beruht. Er ist **absichtlich nicht behoben** — ihn vom selben Builder
 beheben zu lassen, der ihn gefunden hat, wäre wieder eine Selbstbestätigung.
 
-**Pilot 2 — ein eng begrenzter mahoraga-Task.**
-`work/tasks/TASK-001-registerpruefer.md` im mahoraga-Repo: ein Registerprüfer mit Exit-Code. Er ist
-nicht beliebig gewählt — mahoraga enthält **keine ausführbare Zeile**, und ohne Testkommando ist
-`tests.ran = false`, womit das Gate jede Lieferung dieses Repos auf `CHANGES_REQUIRED` setzt,
-unabhängig vom Inhalt. Vorher kann das Verfahren an mahoraga nicht arbeiten.
+**Pilot 2 — mahoraga, und zwar zurückhaltender als geplant.**
+
+Hier ist eine frühere Annahme dieses Dokuments **falsch gewesen**, und die Korrektur ist der
+eigentliche Inhalt dieses Abschnitts: ich hatte gegen einen zwei Wochen alten Branch gearbeitet
+(`PHASE 4`) und daraus geschlossen, mahoraga habe keine ausführbare Zeile. Der lebende Stand
+steht bei `PHASE 17 LOCKED`, hat 236 Dateien und **sechs Rechner**, die seit Stufe 1.2 wirklich
+gaten (`eigentest_gate()` sucht jedes `bestanden: false`, `main()` gibt 1 zurück). Das
+Testkommando dieses Repos sind diese sechs — nicht DevOS' generischer Registerprüfer.
+
+Zwei weitere Annahmen fielen mit: `R-213` ist auf dem lebenden Stand **ein echtes Risiko dieses
+Repos** (genau die Falschbestätigung, gegen die DevOS gebaut ist), nicht eine fremde Assay-ID.
+Und der geplante `STATE.md`-Generator existiert dort bereits als Prototyp und ist in der
+Reihenfolge als Stufe 4.3 geführt.
+
+**Deshalb liegt jetzt keine mahoraga-Task von mir dort.** Das Projekt hat sich am 2026-09-15
+eine Reihenfolge gegeben (`workshop/VORGEHEN-NACH-ASSAY.md`); DevOS ist darin **Stufe 5 — Der
+zweite Prüfer**, mit derselben Rollentabelle, die DevOS implementiert. Stufe 1 ist vollzogen,
+und die nächste offene Stufe sind **drei Auftraggeber-Beschlüsse**. Eine Task daran vorbei zu
+schneiden hieße, die Reihenfolge zu unterlaufen, die dieses Projekt sich gerade gegeben hat.
+
+Was heute ohne Beschluss geht: ein **Fremdblick auf einen vorhandenen Stand** — er erzeugt
+Befunde, keinen Commit. Der Handover benennt die Lücke selbst (§9.2): *„Wer ist der ‚zweite
+Autor'? … in einem Facilitator-Lauf nicht lösbar."*
 
 ### Was über 3 – 5 echte Tasks gemessen wird
 

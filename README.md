@@ -55,7 +55,7 @@ abhängt, wird in der Praxis optional, und ein optionales Gate ist keins.
 git clone <dieses-repo> ~/devos
 export PATH="$HOME/devos/bin:$PATH"
 
-devos selftest                           # 176 Proben, Exit 1 bei Fehlschlag
+devos selftest                           # 182 Proben, Exit 1 bei Fehlschlag
 
 mkdir -p ~/.config/devos
 cp ~/devos/templates/env.example ~/.config/devos/env
@@ -100,7 +100,19 @@ Im geprüften Projekt eine `.devos.json` anlegen (Vorlage:
 ```
 
 `kind` ist `heading` (Abschnitt bis zur nächsten gleichrangigen Überschrift) oder `row`
-(Tabellenzeilen, die mit `| <ID> ` beginnen). Der Register-Präfix ist der Buchstabenteil
+(Tabellenzeilen, die mit `| <ID> ` beginnen). Weitere Felder, jedes aus einem Fehlalarm an
+einem echten Bestand entstanden:
+
+| Feld | Wofür |
+|---|---|
+| `"tests": "…"` | Das Testkommando des Projekts. Steht es hier, tippt es niemand zweimal, und Bereitschaftstest wie Orchestrator benutzen dieselbe Zeile |
+| `"multi_row": true` je Register | Das Register führt **mehrere Zeilen je ID** und die letzte gilt. Ohne diese Angabe meldet der Prüfer jede Fortschreibung als Doppeldefinition |
+| `"ignore_paths": ["tools/*.py"]` | Nicht nach Referenzen durchsuchen. Eine ID in einem Testfixture ist keine Referenz |
+| `"external_ids": {"X-1": "Herkunft"}` | IDs, die dem Muster entsprechen, aber einem anderen Projekt gehören |
+
+**Und die wichtigste Grenze zuerst:** `check_registers.py` ist für Projekte gedacht, die noch
+keine eigenen Rechner haben. Ein Projekt mit eigenen Gates benutzt **die** als `--tests` — sie
+kennen seine Regeln, der generische Prüfer kennt nur `.devos.json`. Der Register-Präfix ist der Buchstabenteil
 der ID: `D-144` → `D`, `OQ-003` → `OQ`, `G01` → `G`. **Fehlt die Datei, läuft das Werkzeug
 weiter — aber ohne Normquellen, und es sagt das in `omitted`**, statt so zu tun, als
 hätte es nichts zu holen gegeben.

@@ -625,6 +625,74 @@ def orchestrator_proben() -> None:
           p.returncode == 2 and st.get("outcome") != "PASS", f"Exit {p.returncode}")
 
 
+CHECKREG = HERE / "check_registers.py"
+
+
+def registerproben() -> None:
+    """Der Pruefer darf nicht melden, was das Projekt absichtlich so baut.
+
+    Jede dieser Proben haelt einen Fehlalarm fest, den die erste Fassung an einem
+    ECHTEN Bestand erzeugt hat. Ein Pruefer mit Fehlalarmen ist schlimmer als
+    keiner: man gewoehnt sich an Rot.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        git(td, "init", "-q", ".")
+        git(td, "config", "user.email", "t@t"); git(td, "config", "user.name", "t")
+        (Path(td) / "registers").mkdir()
+        (Path(td) / "tools").mkdir()
+        (Path(td) / ".devos.json").write_text(json.dumps({
+            "project": "p", "id_pattern": r"\b(OQ-\d{3}|R-\d{3})\b",
+            "registers": {
+                "OQ": {"path": "registers/oq.md", "kind": "row", "multi_row": True},
+                "R": {"path": "registers/r.md", "kind": "row"}},
+            "ignore_paths": ["tools/*.py"],
+            "tests": "echo hallo"}), encoding="utf-8")
+        # OQ wird fortgeschrieben: drei Zeilen zu OQ-001, die letzte gilt.
+        (Path(td) / "registers" / "oq.md").write_text(
+            "| ID | Frage | Status |\n|---|---|---|\n"
+            "| OQ-001 | erste Fassung | offen |\n"
+            "| OQ-001 | zweite Fassung | verengt |\n"
+            "| OQ-001 | dritte Fassung | geschlossen |\n"
+            "| OQ-002 | mit Vermerk | offen | **Nachtrag:** dazugeschrieben |\n"
+            "| OQ-003 | abgeschnitten |\n", encoding="utf-8")
+        (Path(td) / "registers" / "r.md").write_text(
+            "| ID | Risiko |\n|---|---|\n| R-001 | etwas |\n", encoding="utf-8")
+        # Ein Testfixture im Werkzeugverzeichnis — keine Referenz.
+        (Path(td) / "tools" / "rechner.py").write_text(
+            'PROBE = "| OQ-999 | Gegenstand | offen |"\n', encoding="utf-8")
+        (Path(td) / "doku.md").write_text(
+            "OQ-001 und R-001 werden hier genannt. Die Lint-Regel R-7 nicht.\n",
+            encoding="utf-8")
+
+        p = subprocess.run([sys.executable, str(CHECKREG), "--root", td, "--json"],
+                           capture_output=True, text=True)
+        js = json.loads(p.stdout)
+        befunde = " | ".join(js["befunde"])
+        check("R1 ein fortgeschriebenes Register ist keine Doppeldefinition",
+              "Doppeldefinition" not in befunde and "OQ-001" in js["mehrfassungen"],
+              befunde[:180])
+        check("R2 eine ID im ausgenommenen Werkzeugverzeichnis ist keine Referenz",
+              "OQ-999" not in befunde, befunde[:180])
+        check("R3 eine angehaengte Vermerkspalte ist ein Hinweis, kein Befund",
+              not any("OQ-002" in b for b in js["befunde"])
+              and any("OQ-002" in h for h in js["formhinweise"]),
+              json.dumps(js["formhinweise"])[:180])
+        check("R4 eine ABGESCHNITTENE Zeile ist sehr wohl ein Befund — da fehlt Inhalt",
+              any("OQ-003" in b and "fehlt Inhalt" in b for b in js["befunde"]),
+              befunde[:180])
+        check("R5 ein enges ID-Muster schuetzt vor fremden ID-Raeumen (R-7 ist Lint)",
+              "R-7" not in befunde, befunde[:180])
+
+        git(td, "add", "."); git(td, "commit", "-qm", "erst")
+        p = subprocess.run([sys.executable, str(PREFLIGHT), "--root", td, "--json"],
+                           capture_output=True, text=True)
+        punkte = {z["punkt"]: z for z in json.loads(p.stdout)["checks"]}
+        check("R6 das Testkommando aus .devos.json wird uebernommen — niemand tippt es zweimal",
+              punkte.get("Testkommando", {}).get("zustand") == "ok"
+              and "aus .devos.json" in punkte["Testkommando"]["detail"],
+              json.dumps(punkte.get("Testkommando"))[:160])
+
+
 GRAPHIFY = HERE / "graphify_adapter.py"
 PREFLIGHT = HERE / "preflight.py"
 
@@ -1456,6 +1524,9 @@ def main() -> int:
 
     print("\nO — Orchestrator: Runden, Budget, Zustand, Fortsetzung:")
     orchestrator_proben()
+
+    print("\nR — Registerpruefer: die Regeln des Projekts, nicht die eigenen:")
+    registerproben()
 
     print("\nP — Bereitschaft: der Bericht sagt, was fehlt, nicht nur dass etwas fehlt:")
     preflight_proben()

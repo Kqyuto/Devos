@@ -73,6 +73,14 @@ class Config:
         # Austauschbare Kontextsuche. Leer = eingebauter Index bzw. gar keiner.
         # Nichts im Verfahren haengt davon ab.
         self.graph: dict = roh.get("graph") or {}
+        # Pfadmuster, die NICHT nach ID-Referenzen durchsucht werden. Gedacht
+        # fuer Werkzeugverzeichnisse: eine ID in einem Testfixture ist keine
+        # Referenz, und sie als toten Anker zu melden ist ein Fehlalarm.
+        self.ignore_paths: list = roh.get("ignore_paths") or []
+        # Das Testkommando des Projekts. Steht es hier, muss es niemand bei
+        # jedem Lauf wiederholen — und es ist dieselbe Zeile fuer den
+        # Bereitschaftstest, den Orchestrator und jeden Menschen, der nachsieht.
+        self.tests: str | None = roh.get("tests") or None
 
     def hinweis(self) -> dict | None:
         """Der Eintrag fuer `omitted`, wenn die Bindung fehlt oder kaputt ist."""

@@ -82,21 +82,26 @@ Geld fließt — und der einzige, der beweist, dass ein **echtes** Modell mitspi
 
 ```bash
 git clone https://github.com/Kqyuto/mahoraga ~/mahoraga
-cd ~/mahoraga
+cd ~/mahoraga && git checkout claude/devos-mahoraga-workflow-cd7bqv
 
-devos preflight --tests "python3 ~/devos/tools/check_registers.py --root ."
+devos preflight
 ```
 
-`.devos.json` liegt dort schon: vier Register, ihre Formen, die Laufgrenzen, und `R-213`
-als auswärtige ID vermerkt. Geprüft — 290 IDs, alle auflösbar.
+Kein `--tests` nötig: `.devos.json` liegt dort und nennt das Testkommando selbst — die
+**sechs Pflichtläufe des Projekts** (`review_rechnung1.py`, `state_registerstand.py`,
+`fremdrechnung.py`, `baugraph_rechnung1.py`, `zitat_rechnung1.py`, `tprime_rechnung1.py`).
+Nicht DevOS' eigener Registerprüfer: der kennt nur `.devos.json`, die sechs kennen die
+Regeln dieses Bestands. Geprüft — 702 IDs, alle auflösbar, Testlauf grün in 1,3 s.
 
-Dann der erste Lauf:
+Dann ein Lauf. **Aber welcher**, das steht in
+[`work/README.md`](https://github.com/Kqyuto/mahoraga/blob/claude/devos-mahoraga-workflow-cd7bqv/work/README.md)
+des Projekts — und die Antwort ist absichtlich zurückhaltend: mahoraga hat sich gerade eine
+Reihenfolge gegeben (`workshop/VORGEHEN-NACH-ASSAY.md`), DevOS ist darin **Stufe 5**, und
+davor stehen drei Beschlüsse, die nur der Auftraggeber fällen kann. Was heute ohne Beschluss
+geht, ist ein **Fremdblick auf einen bereits vorhandenen Stand** — er ändert nichts:
 
 ```bash
-devos run \
-    --task work/tasks/TASK-001-state-generator.md \
-    --onto main \
-    --tests "python3 ~/devos/tools/check_registers.py --root ."
+devos review --task work/tasks/<eine-task>.md --base <commit-vorher> --head HEAD
 ```
 
 Der Lauf baut den Kontextindex, ruft den Builder, fährt die Maschinentests im isolierten
@@ -230,7 +235,7 @@ Durchsatz gegen 6 – 14 h/Woche. Bei weniger sagt es das und urteilt nicht.
 
 ## Der Stand in einem Satz
 
-Alles bis auf den Schlüssel ist gebaut und mit **176 Proben** belegt — aber
+Alles bis auf den Schlüssel ist gebaut und mit **182 Proben** belegt — aber
 **in der gesamten Entwicklung wurde kein einziges Mal ein echtes Modell aufgerufen.**
 Geprüft ist der Transport, das Gate, der Zustand, die Grenzen und der Index; nicht das
 Urteil. Schritt 2 ist genau der Schritt, der das ändert. Was dabei am ehesten hakt, steht
