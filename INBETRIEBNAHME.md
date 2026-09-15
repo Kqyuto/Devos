@@ -4,7 +4,7 @@ Dieses Dokument trennt drei Dinge, die sonst ineinanderlaufen: **geprüft an ech
 **geprüft gegen eine Attrappe** und **überhaupt nicht geprüft**. Die zweite Kategorie ist die
 gefährliche — sie sieht in einem grünen Testlauf genauso aus wie die erste.
 
-Stand: Eigentest `176 von 176`, `tools/reproduce_findings.py` Exit 0.
+Stand der Gate-Korrektur: Eigentest `203 von 203`, `tools/reproduce_findings.py` Exit 0.
 
 **Der kürzeste Weg von hier: [`START.md`](START.md).** Dieses Dokument ist die
 Begründung dahinter — was belegt ist und was nicht.
@@ -100,10 +100,11 @@ nicht versehentlich im öffentlichen Werkzeug-Repo landen.
 ## 4 · Der Pilotplan
 
 **Pilot 1 — eine kleine DevOS-Gate-Korrektur.**
-`work/tasks/TASK-001-devos-gate-korrektur.md`, Befund `G06`: das Gate prüft die Provenienz nicht,
-aus der es den Nachweis der Familientrennung liest. Klein, von außen prüfbar, und er betrifft genau
-das, worauf das Verfahren beruht. Er ist **absichtlich nicht behoben** — ihn vom selben Builder
-beheben zu lassen, der ihn gefunden hat, wäre wieder eine Selbstbestätigung.
+`work/tasks/TASK-001-devos-gate-korrektur.md`: die Korrektur von `G06` (Provenienzprüfung)
+und `G07` (vollständige Acceptance-Zuordnung) liegt auf `codex/devos-gate-evidence`.
+Der Pilot prüft diese vorhandene Lieferung mit `devos review`; Befehl und Basiscommit stehen
+in `START.md`. Builder dieser Korrektur ist Codex/OpenAI, daher muss ihr unabhängiger Reviewer
+einer anderen Familie angehören. Ein echter Modelllauf und dessen Kosten sind noch nicht belegt.
 
 **Pilot 2 — ein eng begrenzter mahoraga-Task.**
 `work/tasks/TASK-001-registerpruefer.md` im mahoraga-Repo: ein Registerprüfer mit Exit-Code. Er ist

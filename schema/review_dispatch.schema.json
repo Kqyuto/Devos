@@ -1,0 +1,252 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "DevOS transport record 1.2",
+  "description": "Local transport record. Artifact hashes are checked by the gate; they do not authenticate the remote provider. Failed dispatches and absent context/result hashes can be recorded but cannot serve as measured evidence.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "started_at",
+    "finished_at",
+    "endpoint_host",
+    "model",
+    "reviewer",
+    "builder",
+    "independence",
+    "request_sha256",
+    "context_sha256",
+    "result_sha256",
+    "request_bytes",
+    "attempts",
+    "calls",
+    "usage_total",
+    "cost_usd",
+    "cost_basis",
+    "source_requests",
+    "coverage_repair",
+    "ok"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {
+      "const": "1.2"
+    },
+    "started_at": {
+      "type": "string"
+    },
+    "finished_at": {
+      "type": "string"
+    },
+    "endpoint_host": {
+      "type": "string"
+    },
+    "model": {
+      "type": "string"
+    },
+    "reviewer": {
+      "type": "object",
+      "required": [
+        "model",
+        "family",
+        "declared_via"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "family": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "declared_via": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "builder": {
+      "type": "object",
+      "required": [
+        "model",
+        "family",
+        "declared_via"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "family": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "declared_via": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "independence": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "separated": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "builder_family": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reviewer_family": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "why": {
+          "type": "string"
+        }
+      }
+    },
+    "request_sha256": {
+      "type": "string"
+    },
+    "context_sha256": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "result_sha256": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "request_bytes": {
+      "type": "integer"
+    },
+    "attempts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "runde",
+          "response_sha256",
+          "bytes",
+          "schema_errors",
+          "usage"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "runde": {
+            "type": "integer"
+          },
+          "response_sha256": {
+            "type": "string"
+          },
+          "bytes": {
+            "type": "integer"
+          },
+          "schema_errors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "usage": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "prompt_tokens": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "completion_tokens": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              },
+              "total_tokens": {
+                "type": [
+                  "integer",
+                  "null"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "calls": {
+      "type": "integer"
+    },
+    "usage_total": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "prompt_tokens": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "completion_tokens": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "total_tokens": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        }
+      }
+    },
+    "cost_usd": {
+      "type": [
+        "number",
+        "null"
+      ]
+    },
+    "cost_basis": {
+      "type": "string"
+    },
+    "source_requests": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "coverage_repair": {
+      "type": "boolean"
+    },
+    "ok": {
+      "type": "boolean"
+    }
+  }
+}

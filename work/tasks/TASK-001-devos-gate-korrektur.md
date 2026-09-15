@@ -1,6 +1,9 @@
 # TASK-001 — Die Provenienz wird geprüft, nicht geglaubt
 
-**Schiene:** Pilot · **Geschätzt:** 1 – 2 h · **Branch:** `claude/task-001-provenienz-schema`
+**Schiene:** Pilot · **Geschätzt:** 1 – 2 h · **Branch:** `codex/devos-gate-evidence`
+
+**Stand:** Korrektur implementiert, unabhängiges Review und menschliche Abnahme ausstehend.
+Basis: `c7727bb5e9c42314fc844a7abb6b1bb49c63891d`. Builder der Korrektur: Codex/OpenAI.
 
 ## Gegenstand
 
@@ -34,8 +37,12 @@ von einer *Behauptung* über einen Nachweis.
 - eine Provenienz mit `"ok": false` oder ohne erfolgreichen Versuch in `attempts` zählt ebenfalls
   nicht als gemessener Nachweis
 - die oben gezeigte dreizeilige Datei erzeugt kein Exit 0 mehr
-- `python3 tools/selftest.py` endet mit Exit 0, und keine der 121 vorhandenen Proben wurde
+- `python3 tools/selftest.py` endet mit Exit 0, und keine der 176 am Basiscommit vorhandenen Proben wurde
   abgeschwächt, um das zu erreichen
+- volle SHA256-Hashes binden die Provenienz an die tatsächlich vorgelegten Paket-, Kontext- und
+  Ergebnisdateien; ein abweichendes Artefakt zählt nicht als gemessener Nachweis
+- jeder geforderte Acceptance-Punkt wird nach Formatnormalisierung vollständig und genau einmal
+  bewertet; gemeinsame Satzanfänge oder doppelte Einträge reichen nicht (G07)
 
 ## Forbidden
 
@@ -50,12 +57,15 @@ von einer *Behauptung* über einen Nachweis.
 - G01 — die Begründung dafür, dass eine parsende JSON-Datei kein Beleg ist
 - G04 — warum die Familientrennung überhaupt nachgewiesen werden muss
 
-## Offen / Unentschieden
+## Ergänzter Umfang und Grenzen
 
-Der Builder entscheidet das **nicht** selbst, sondern legt es dem Menschen vor:
+Mit Zustimmung zur Empfehlung wurde die Paketbindung in den Korrekturumfang aufgenommen,
+einschließlich Kontext und Ergebnis, sowie die separat reproduzierte Acceptance-Lücke G07.
+Das Gate verlangt Provenienzschema 1.2 und volle Hashes. Ältere Versionen werden mit Grund
+verworfen; eine vorhandene Reviewer-Selbstauskunft wird weiterhin ausdrücklich als solche geführt.
+Ohne verwertbare Provenienz und ohne Selbstauskunft bleibt PASS unerreichbar.
 
-- Soll `request_sha256` aus der Provenienz gegen die tatsächliche `REVIEW-REQUEST.md` geprüft werden?
-  Das würde den Nachweis an *dieses* Paket binden statt nur an *ein* Paket — es ist die eigentliche
-  Lücke dahinter, aber es ist eine größere Änderung als diese Task.
-- Eine Provenienz aus einem älteren Werkzeugstand (`schema_version: "1.0"`) hat kein `reviewer`-Feld.
-  Gilt sie als „kein Nachweis" (dann blockiert sie ältere Läufe) oder als Selbstauskunft?
+Die Bindung prüft lokale Konsistenz. Sie beweist weder die Identität eines entfernten Anbieters
+noch schützt sie vor gemeinsam gefälschten Dateien. Die Abnahme bleibt offen; ein grüner
+Eigentest ersetzt das unabhängige Review nicht. Die anfängliche Task nannte 121 Bestandsproben;
+am Basiscommit sind es 176, die mit dieser Korrektur erhalten bleiben.

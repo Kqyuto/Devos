@@ -1,11 +1,16 @@
 # Von hier bis zum ersten echten Lauf
 
-Drei Schritte. Alles andere ist gebaut und geprüft.
+Drei Schritte. Der lokale Eigentest ist belegt; der echte Modelllauf steht noch aus.
 
 ```bash
-git clone https://github.com/Kqyuto/Devos ~/devos
+git clone --branch codex/devos-gate-evidence https://github.com/Kqyuto/Devos ~/devos
+cd ~/devos
 export PATH="$HOME/devos/bin:$PATH"          # optional, macht `devos` zum Kommando
 ```
+
+Dieser Korrekturbranch enthält den Workflow samt Gate-Fixes. `main` enthält beim Erstellen
+dieser Anleitung noch den älteren Stand ohne `bin/devos`. Vor einem Pilot den geprüften
+Commit mit `git rev-parse HEAD` festhalten; der Branch ist noch keine Abnahme.
 
 ---
 
@@ -114,15 +119,22 @@ dieser Kette mergt, checkt aus oder verschiebt einen Branch.
 
 ```bash
 cd ~/devos
-devos run --task work/tasks/TASK-001-devos-gate-korrektur.md \
-          --onto main --tests "python3 tools/selftest.py"
+DEVOS_BUILDER_MODEL=codex DEVOS_BUILDER_FAMILY=openai \
+devos review --task work/tasks/TASK-001-devos-gate-korrektur.md \
+             --base c7727bb5e9c42314fc844a7abb6b1bb49c63891d --head HEAD \
+             --out work/review/TASK-001 --tests "python3 tools/selftest.py"
 ```
 
-Befund `G06`: das Gate liest den Nachweis der Familientrennung aus `review_dispatch.json`
-und prüft diese Datei gegen nichts. Er ist **absichtlich offen** — klein, von außen prüfbar,
-und er betrifft genau das, worauf das Verfahren beruht. Ein erster Lauf an einem Gegenstand,
-dessen richtiges Ergebnis man kennt, ist mehr wert als einer an einem, bei dem man es raten
-muss.
+**Vor diesem Befehl den Reviewer-Zugang auf eine andere Familie als OpenAI einstellen.**
+Diese Korrektur wurde von Codex gebaut. Die vorbelegte Kombination Claude als Builder / GPT
+als Reviewer beschreibt ihre Urheberschaft daher nicht. Reviewer-Modell, Familie, Endpunkt
+und Schlüssel müssen zusammenpassen; DevOS benötigt einen OpenAI-kompatiblen Endpunkt.
+
+`G06` (ungeprüfte Provenienz) und `G07` (verkürzte Acceptance) sind hier implementiert und
+lokal geprüft. Der erste echte Lauf prüft diese vorhandene Korrektur gegen ihren Basiscommit,
+ohne sie erneut bauen zu lassen. Paket, Urteil, Transportnachweis und Gate-Ausgabe gehören
+zum Review; der Mensch entscheidet danach über den Merge. Erst eine folgende kleine Task
+misst auch den vollständigen Builder-/Korrekturschleifenlauf mit `devos run`.
 
 ---
 
@@ -230,7 +242,7 @@ Durchsatz gegen 6 – 14 h/Woche. Bei weniger sagt es das und urteilt nicht.
 
 ## Der Stand in einem Satz
 
-Alles bis auf den Schlüssel ist gebaut und mit **176 Proben** belegt — aber
+Der lokale Werkzeugstand ist mit **203 Proben** belegt — aber
 **in der gesamten Entwicklung wurde kein einziges Mal ein echtes Modell aufgerufen.**
 Geprüft ist der Transport, das Gate, der Zustand, die Grenzen und der Index; nicht das
 Urteil. Schritt 2 ist genau der Schritt, der das ändert. Was dabei am ehesten hakt, steht

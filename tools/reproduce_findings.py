@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Reproduktion der Reviewer-Befunde G01-G05 — ausfuehrbar, nicht behauptet.
+"""Reproduktion der Reviewer-Befunde G01-G07 — ausfuehrbar, nicht behauptet.
 
 GPT hat bei einer Codelektuere vier moegliche Luecken benannt. Eine Lektuere ist
 keine Reproduktion. Dieses Skript fuehrt jede Luecke am *laufenden* Werkzeug vor:
@@ -22,6 +22,8 @@ wenn jemand sie spaeter wieder herausnimmt.
 from __future__ import annotations
 
 import argparse
+import copy
+import hashlib
 import http.server
 import json
 import os
@@ -67,10 +69,17 @@ def context(**over) -> dict:
 
 
 def dispatch_prov(**over) -> dict:
-    d = {"schema_version": "1.1", "model": "gpt-5",
+    d = {"schema_version": "1.2", "model": "gpt-5",
          "reviewer": {"model": "gpt-5", "family": "openai", "declared_via": "probe"},
          "builder": {"model": "claude-opus-5", "family": "anthropic", "declared_via": "probe"},
-         "independence": {"separated": True, "why": "openai != anthropic"}, "ok": True}
+         "independence": {"separated": True, "why": "openai != anthropic"}, "ok": True,
+         "started_at": "2026-09-15T00:00:00+00:00", "finished_at": "2026-09-15T00:00:01+00:00",
+         "endpoint_host": "127.0.0.1", "request_sha256": "<fixture>",
+         "context_sha256": "<fixture>", "result_sha256": "<fixture>",
+         "request_bytes": len(b"Synthetic findings packet\n"), "calls": 1,
+         "attempts": [{"runde": 1, "response_sha256": "a" * 64, "bytes": 1,
+                       "schema_errors": [], "usage": {}}], "usage_total": {},
+         "cost_usd": None, "cost_basis": "fixture", "source_requests": [], "coverage_repair": False}
     d.update(over)
     return d
 
@@ -96,6 +105,15 @@ def gate(res, ctx, prov=dispatch_prov(), ctx_raw: str | None = None) -> dict:
             cp.write_text(json.dumps(ctx), encoding="utf-8")
             cmd += ["--context", str(cp)]
         if prov is not None and DISPATCH_FLAG:
+            prov = copy.deepcopy(prov)
+            packet = Path(td) / "REVIEW-REQUEST.md"
+            packet.write_text("Synthetic findings packet\n", encoding="utf-8")
+            bindings = {"request_sha256": packet, "result_sha256": rp}
+            if "--context" in cmd:
+                bindings["context_sha256"] = Path(cmd[cmd.index("--context") + 1])
+            for key, path in bindings.items():
+                if prov.get(key) == "<fixture>" and path.is_file():
+                    prov[key] = hashlib.sha256(path.read_bytes()).hexdigest()
             pp = Path(td) / "review_dispatch.json"
             pp.write_text(json.dumps(prov), encoding="utf-8")
             cmd += ["--dispatch", str(pp)]
@@ -290,12 +308,41 @@ def g05_schemapruefer_ueberzeichnet() -> list[dict]:
     return faelle
 
 
+def g06_provenienz_ungeprueft() -> list[dict]:
+    return [
+        fall("G06.1 Minimaldatei gilt als gemessener Nachweis",
+             "kein Nachweis, Schemaverletzung benannt",
+             gate(result(), context(), {"reviewer": {"model": "gpt-5", "family": "openai"}}),
+             (2,), "Transport-Provenienz verletzt Schema"),
+        fall("G06.2 Transport meldet ok=false",
+             "fehlgeschlagener Lauf zaehlt nicht als Nachweis",
+             gate(result(), context(), dispatch_prov(ok=False)), (2,), "ok ist nicht true"),
+        fall("G06.3 Provenienz gehoert zu einem anderen Paket",
+             "abweichender Pakethash schliesst gemessenen Nachweis aus",
+             gate(result(), context(), dispatch_prov(request_sha256="0" * 64)),
+             (2,), "request_sha256 passt nicht"),
+    ]
+
+
+def g07_acceptance_praefix() -> list[dict]:
+    ctx = context()
+    ctx["task"]["acceptance"] = ["Der Testlauf endet mit Exit 0 bei Erfolg",
+                                "Der Testlauf endet mit Exit 1 bei einem Fehler"]
+    res = result()
+    res["reviewed"]["acceptance_items"] = [{"item": "Der Testlauf endet", "verdict": "met"}]
+    return [fall("G07.1 Ein Satzanfang erfuellt zwei unterschiedliche Forderungen",
+                 "beide Forderungen werden als unbewertet benannt",
+                 gate(res, ctx), (2,), "nicht bewertet")]
+
+
 BEFUNDE = [
     ("G01", "review_context.json ohne strukturelle Schemapruefung", g01_kontext_ohne_schemapruefung),
     ("G02", "Acceptance-Abdeckung wird nicht abgeglichen", g02_acceptance_ohne_abdeckung),
     ("G03", "Testnachweis wird nicht gegen Revision und Exit-Code geprueft", g03_testnachweis_ungeprueft),
     ("G04", "Modellfamilien-Trennung wird nicht ueberprueft", g04_modellfamilie_ungeprueft),
     ("G05", "Schemapruefer nennt mehr Konstrukte unterstuetzt als er durchsetzt", g05_schemapruefer_ueberzeichnet),
+    ("G06", "Transport-Provenienz wird ohne Pruefung geglaubt", g06_provenienz_ungeprueft),
+    ("G07", "Gemeinsamer Acceptance-Satzanfang ersetzt volle Forderungen", g07_acceptance_praefix),
 ]
 
 

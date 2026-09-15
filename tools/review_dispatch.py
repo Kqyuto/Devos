@@ -114,7 +114,7 @@ SCHEMA:
 
 
 def sha(s: str) -> str:
-    return hashlib.sha256(s.encode("utf-8")).hexdigest()[:16]
+    return hashlib.sha256(s.encode("utf-8")).hexdigest()
 
 
 def extract_json(text: str) -> tuple[dict | None, str]:
@@ -253,7 +253,7 @@ def main() -> int:
     if not req_path.exists():
         print(f"[2] Review-Paket fehlt: {req_path}", file=sys.stderr)
         return 2
-    paket = req_path.read_text(encoding="utf-8")
+    paket = req_path.read_bytes().decode("utf-8")
     out = Path(a.out)
     out.parent.mkdir(parents=True, exist_ok=True)
 
@@ -277,10 +277,13 @@ def main() -> int:
 
     # --- Kontext (optional) fuer Kopf, Familienangabe des Builders und Nachforderung
     ctx = None
+    context_sha256 = None
     if a.context and Path(a.context).exists():
         try:
-            geladen = json.loads(Path(a.context).read_text(encoding="utf-8"))
+            context_bytes = Path(a.context).read_bytes()
+            geladen = json.loads(context_bytes.decode("utf-8"))
             ctx = geladen if isinstance(geladen, dict) else None
+            context_sha256 = hashlib.sha256(context_bytes).hexdigest()
         except Exception:
             ctx = None
 
@@ -401,13 +404,16 @@ def main() -> int:
         break
 
     kost, kostengrund = kosten(verbrauch)
-    prov = {"schema_version": "1.1", "started_at": started,
+    result_text = json.dumps(result, ensure_ascii=False, indent=2) if result is not None else None
+    prov = {"schema_version": "1.2", "started_at": started,
             "finished_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "endpoint_host": urlsplit(base).netloc, "model": model,
             "reviewer": reviewer, "builder": builder,
             "independence": {k: unab[k] for k in ("separated", "builder_family",
                                                   "reviewer_family", "why")},
             "request_sha256": sha(paket), "request_bytes": len(paket.encode()),
+            "context_sha256": context_sha256,
+            "result_sha256": sha(result_text) if result_text is not None else None,
             "attempts": versuche, "calls": len(versuche),
             "usage_total": {
                 "prompt_tokens": sum(v.get("prompt_tokens") or 0 for v in verbrauch) or None,
@@ -429,7 +435,7 @@ def main() -> int:
               "    Datei waere schlimmer als keine.", file=sys.stderr)
         return 4
 
-    out.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+    out.write_bytes(result_text.encode("utf-8"))
     trenn = {True: "nachgewiesen", False: "VERLETZT", None: "nicht nachgewiesen"}[unab["separated"]]
     print(f"Urteil geholt: {result['status']} · {len(result['blocking'])} blockierend · "
           f"Modell {model} @ {prov['endpoint_host']} · Aufrufe {len(versuche)}")
