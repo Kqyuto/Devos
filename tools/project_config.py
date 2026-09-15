@@ -29,7 +29,21 @@ from pathlib import Path
 DATEI = ".devos.json"
 STANDARD_ID_PATTERN = r"\b([A-Z]{1,4}-\d{1,4})\b"
 STANDARD_PFADE = {"tasks": "work/tasks", "review": "work/review",
-                  "deliveries": "work/deliveries.jsonl"}
+                  "deliveries": "work/deliveries.jsonl", "runs": "work/runs"}
+
+# Endliche Vorgaben. "Maximal zwei Korrekturrunden insgesamt" heisst: die
+# Erstlieferung plus hoechstens zwei Nachbesserungen, und eine Nachbesserung
+# nach fehlgeschlagenen Maschinentests zaehlt genauso wie eine nach einem
+# Reviewer-Befund. Kein Wert hier ist unbegrenzt — ein Limit, das man weglassen
+# kann, ist keins.
+STANDARD_LIMITS = {
+    "max_correction_rounds": 2,
+    "max_wall_minutes": 180,
+    "max_builder_calls": 3,
+    "max_reviewer_calls": 3,
+    "max_cost_usd": None,          # bindet nur mit konfigurierten Token-Preisen
+    "builder_timeout_seconds": 3600,
+}
 
 
 class Config:
@@ -49,6 +63,9 @@ class Config:
         self.id_pattern = roh.get("id_pattern") or STANDARD_ID_PATTERN
         self.registers: dict[str, dict] = roh.get("registers") or {}
         self.paths = {**STANDARD_PFADE, **(roh.get("paths") or {})}
+        self.limits = {**STANDARD_LIMITS, **(roh.get("limits") or {})}
+        self.builder: dict = roh.get("builder") or {}
+        self.model_families: dict = roh.get("model_families") or {}
 
     def hinweis(self) -> dict | None:
         """Der Eintrag fuer `omitted`, wenn die Bindung fehlt oder kaputt ist."""

@@ -351,6 +351,235 @@ def e2e_proben() -> None:
               f"Exit {p.returncode} {p.stderr.strip()[:160]}")
 
 
+
+# ---------------------------------------------------------------- Orchestrator
+
+RUN_TASK = HERE / "run_task.py"
+HANDOVER = HERE / "handover.py"
+
+
+def reviewer_server(urteil):
+    """Ein Reviewer, der den geprueften Head aus dem Paket liest.
+
+    Muss er auch: das Gate vergleicht `reviewed_range.head` zeichengenau, und
+    der Head aendert sich mit jeder Runde. Ein fester SHA wuerde ab Runde 2
+    INSUFFICIENT_CONTEXT erzeugen — und damit etwas anderes pruefen als gemeint.
+    """
+    import http.server, re, threading
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            n = int(self.headers.get("Content-Length", 0))
+            body = json.loads(self.rfile.read(n).decode())
+            paket = body["messages"][-1]["content"]
+            m = re.search(r"\*\*head\*\* `([0-9a-f]{40})`", paket)
+            b = re.search(r"\*\*base\*\* `([0-9a-f]{40})`", paket)
+            inhalt = urteil(b.group(1) if b else "?", m.group(1) if m else "?")
+            pay = json.dumps({"choices": [{"message": {"content": inhalt}}],
+                              "usage": {"prompt_tokens": 900, "completion_tokens": 150}}).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(pay)))
+            self.end_headers()
+            self.wfile.write(pay)
+
+        def log_message(self, *a):
+            pass
+
+    srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return f"http://127.0.0.1:{srv.server_address[1]}/v1", srv.shutdown
+
+
+ORCH_ACC = "f() liefert 2"
+
+
+def orch_urteil(status="PASS", blocking=None, items=None):
+    def f(base, head):
+        return json.dumps({
+            "schema_version": "1.0", "task_id": "TASK-O",
+            "reviewed_range": {"base": base, "head": head}, "status": status,
+            "context_sufficient": True, "blocking": blocking or [], "non_blocking": [],
+            "reviewed": {"files": ["a.py"],
+                         "acceptance_items": items if items is not None
+                         else [{"item": ORCH_ACC, "verdict": "met"}],
+                         "tests": {"judged": "adequate"}}})
+    return f
+
+
+def orch_repo(builder_skript: str, limits: dict | None = None) -> tuple[str, str]:
+    """Ein Repo mit Task, rotem Test und einem Builder-Skript. Gibt (root, base)."""
+    td = tempfile.mkdtemp(prefix="devos-orch-")
+    git(td, "init", "-q", ".")
+    git(td, "config", "user.email", "t@t"); git(td, "config", "user.name", "t")
+    (Path(td) / ".devos.json").write_text(json.dumps(
+        {"project": "probe", "limits": limits or {"max_correction_rounds": 2}}), encoding="utf-8")
+    (Path(td) / "a.py").write_text("def f():\n    return 0\n", encoding="utf-8")
+    (Path(td) / "test_a.py").write_text(
+        "from a import f\nassert f() == 2, 'f() liefert nicht 2'\n", encoding="utf-8")
+    (Path(td) / "TASK-O.md").write_text(
+        f"# TASK-O — f liefert 2\n\n## Acceptance\n- {ORCH_ACC}\n\n"
+        "## Forbidden\n- nichts\n\n## Offen / Unentschieden\n- nichts\n", encoding="utf-8")
+    (Path(td) / "builder.sh").write_text(builder_skript, encoding="utf-8")
+    git(td, "add", "."); git(td, "commit", "-qm", "basis")
+    return td, git(td, "rev-parse", "HEAD").stdout.strip()
+
+
+def orch_run(td: str, base: str, urteil, extra: list[str] | None = None,
+             env_extra: dict | None = None, builder: str | None = "bash builder.sh"):
+    burl, stop = reviewer_server(urteil)
+    try:
+        env = {**os.environ, "DEVOS_BUILDER_MODEL": "claude-opus-5",
+               "DEVOS_REVIEWER_API_KEY": SCHLUESSEL, "DEVOS_REVIEWER_MODEL": "gpt-5",
+               "DEVOS_REVIEWER_BASE_URL": burl,
+               "DEVOS_REVIEWER_PRICE_IN": "1.25", "DEVOS_REVIEWER_PRICE_OUT": "10",
+               "no_proxy": "127.0.0.1,localhost", "NO_PROXY": "127.0.0.1,localhost"}
+        if builder:
+            env["DEVOS_BUILDER_CMD"] = builder
+        env.update(env_extra or {})
+        for k, v in list(env.items()):
+            if v is None:
+                env.pop(k)
+        cmd = [sys.executable, str(RUN_TASK), "--task", str(Path(td) / "TASK-O.md"),
+               "--root", td, "--base", base, "--tests", "python3 test_a.py"] + (extra or [])
+        p = subprocess.run(cmd, capture_output=True, text=True, env=env)
+    finally:
+        stop()
+    sf = Path(td) / "work" / "runs" / "TASK-O" / "run_state.json"
+    st = json.loads(sf.read_text(encoding="utf-8")) if sf.exists() else {}
+    return p, st
+
+
+BUILDER_ZWEI_RUNDEN = """#!/bin/bash
+set -e
+if [ "$DEVOS_ROUND" = "1" ]; then printf 'def f():\\n    return 1\\n' > a.py
+else printf 'def f():\\n    return 2\\n' > a.py; fi
+git add -A && git commit -qm "builder runde $DEVOS_ROUND"
+"""
+
+# Liefert nie 2 — die Probe soll das Budget treffen, nicht zufaellig gruen werden.
+BUILDER_IMMER_FALSCH = """#!/bin/bash
+set -e
+printf 'def f():\\n    return 9%s\\n' "$DEVOS_ROUND" > a.py
+git add -A && git commit -qm "builder runde $DEVOS_ROUND"
+"""
+
+
+def orchestrator_proben() -> None:
+    # --- der gesunde Durchlauf: roter Test, Korrektur, Urteil, Human Gate
+    td, base = orch_repo(BUILDER_ZWEI_RUNDEN)
+    p, st = orch_run(td, base, orch_urteil())
+    check("O1 Durchlauf endet beim Menschen mit PASS, Exit 0",
+          p.returncode == 0 and st.get("outcome") == "PASS", f"Exit {p.returncode} {p.stderr[:200]}")
+    check("O1 fehlgeschlagene Maschinentests rufen den Reviewer NICHT",
+          st["spent"]["reviewer_calls"] == 1 and st["spent"]["builder_calls"] == 2,
+          json.dumps(st.get("spent")))
+    check("O1 eine Korrektur nach rotem Test zaehlt als Korrekturrunde",
+          st["spent"]["corrections"] == 1, str(st["spent"].get("corrections")))
+    r1 = next(r for r in st["rounds"] if r["n"] == 1)
+    check("O1 Runde 1 hat gebaut und gepackt, aber nie geurteilt",
+          r1["package"]["status"] == "ok" and r1["review"] is None)
+    check("O1 der Brief der Korrekturrunde nennt den Fehlschlag",
+          "Maschinentests sind fehlgeschlagen"
+          in (Path(td) / "work/runs/TASK-O/round-2/BUILD-BRIEF.md").read_text(encoding="utf-8"))
+    check("O1 PASS uebernimmt nichts — der Branch bleibt, wo er ist",
+          git(td, "rev-parse", "HEAD").stdout.strip() == st["rounds"][-1]["head"])
+    hv = Path(td) / "work/runs/TASK-O/HANDOVER.md"
+    check("O1 das Entscheidungsblatt wird erzeugt und nennt den geprueften Commit",
+          hv.exists() and st["rounds"][-1]["head"] in hv.read_text(encoding="utf-8"))
+    check("O1 Kosten werden ueber den Lauf summiert", st["spent"]["cost_usd"] is not None,
+          str(st["spent"].get("cost_usd")))
+
+    # --- das Budget haelt: zwei Korrekturrunden, dann entscheidet der Mensch
+    td, base = orch_repo(BUILDER_IMMER_FALSCH)
+    p, st = orch_run(td, base, orch_urteil())
+    check("O2 dauerhaft rote Tests => nach 2 Korrekturrunden Human Gate, Exit 1",
+          p.returncode == 1 and st["spent"]["corrections"] == 2, f"Exit {p.returncode}")
+    check("O2 keine unbegrenzten Wiederholungen: hoechstens 3 Builder-Aufrufe",
+          st["spent"]["builder_calls"] == 3, str(st["spent"]["builder_calls"]))
+    check("O2 der Grund steht im Zustand, nicht nur auf dem Bildschirm",
+          "Korrekturrunden verbraucht" in (st.get("stop_reason") or ""), st.get("stop_reason"))
+
+    # --- CHANGES_REQUIRED zaehlt genauso
+    td, base = orch_repo(BUILDER_ZWEI_RUNDEN)
+    blocker = [{"what": "x", "where": "a.py:1", "why": "y"}]
+    p, st = orch_run(td, base, orch_urteil("CHANGES_REQUIRED", blocker))
+    check("O3 CHANGES_REQUIRED loest Korrekturrunden aus und endet im Budget",
+          p.returncode == 1 and st["spent"]["corrections"] == 2
+          and st["spent"]["reviewer_calls"] == 2, json.dumps(st.get("spent")))
+    check("O3 der Brief traegt den Befund des Reviewers zum Builder zurueck",
+          "a.py:1" in (Path(td) / "work/runs/TASK-O/round-3/BUILD-BRIEF.md").read_text(encoding="utf-8"))
+
+    # --- CONFLICT geht sofort zum Menschen, ohne weitere Runde
+    td, base = orch_repo(BUILDER_ZWEI_RUNDEN)
+
+    def mit_konflikt(b, h):
+        o = json.loads(orch_urteil("CHANGES_REQUIRED", [{"what": "x", "where": "a.py:1",
+                                                         "why": "y"}])(b, h))
+        o["governance_conflicts"] = [{"id": "D-144", "what": "Rechte erweitert"}]
+        return json.dumps(o)
+    p, st = orch_run(td, base, mit_konflikt)
+    check("O4 CONFLICT fuehrt sofort zum Menschen, ohne weitere Korrekturrunde",
+          p.returncode == 2 and st["spent"]["corrections"] == 1
+          and "CONFLICT" in (st.get("stop_reason") or ""), f"Exit {p.returncode} {st.get('stop_reason')}")
+
+    # --- Fortsetzung nach Absturz: der teure Schritt wird nicht wiederholt
+    td, base = orch_repo(BUILDER_ZWEI_RUNDEN + "\necho $DEVOS_ROUND >> " + f"{td}/aufrufe.log\n")
+    p, st = orch_run(td, base, orch_urteil(), extra=["--max-rounds", "0"])
+    check("O5 Vorbereitung: erster Lauf endet nach Runde 1 im Budget", p.returncode == 1,
+          f"Exit {p.returncode}")
+    vorher = (Path(td) / "aufrufe.log").read_text(encoding="utf-8").count("\n") \
+        if (Path(td) / "aufrufe.log").exists() else 0
+    kopf1 = git(td, "rev-parse", "HEAD").stdout.strip()
+    p2, st2 = orch_run(td, base, orch_urteil(), extra=["--max-rounds", "0"])
+    nachher = (Path(td) / "aufrufe.log").read_text(encoding="utf-8").count("\n") \
+        if (Path(td) / "aufrufe.log").exists() else 0
+    check("O5 Fortsetzung ruft den Builder fuer eine gebaute Runde NICHT erneut",
+          nachher == vorher and git(td, "rev-parse", "HEAD").stdout.strip() == kopf1,
+          f"Aufrufe {vorher} -> {nachher}")
+
+    # --- eine veraenderte Task macht den Lauf ungueltig
+    (Path(td) / "TASK-O.md").write_text("# TASK-O — etwas ganz anderes\n\n## Acceptance\n- neu\n",
+                                        encoding="utf-8")
+    p3, _ = orch_run(td, base, orch_urteil())
+    check("O6 veraenderte Taskdatei => Fortsetzung verweigert, kein Urteil an einem Phantom",
+          p3.returncode == 5 and "geaendert" in p3.stderr, f"Exit {p3.returncode} {p3.stderr[:160]}")
+
+    # --- der Builder liefert keinen Commit
+    td, base = orch_repo("#!/bin/bash\necho 'ich baue nichts'\n")
+    p, st = orch_run(td, base, orch_urteil())
+    check("O7 Builder ohne Commit => technische Blockade, Exit 5",
+          p.returncode == 5 and "keinen neuen Commit" in (st.get("stop_reason") or ""),
+          f"Exit {p.returncode} {st.get('stop_reason')}")
+
+    # --- der Builder laesst das Arbeitsverzeichnis schmutzig
+    td, base = orch_repo("#!/bin/bash\nset -e\nprintf 'def f():\\n    return 2\\n' > a.py\n"
+                         "git add -A && git commit -qm c\necho 'rest' > uebrig.txt\n")
+    p, st = orch_run(td, base, orch_urteil())
+    check("O8 schmutziges Arbeitsverzeichnis nach dem Bau => Blockade statt ungebundener Lieferung",
+          p.returncode == 5 and "nicht sauber" in (st.get("stop_reason") or ""),
+          f"Exit {p.returncode} {st.get('stop_reason')}")
+
+    # --- ohne Builder: der Auftrag wird geschrieben, der Mensch liefert
+    td, base = orch_repo(BUILDER_ZWEI_RUNDEN)
+    p, st = orch_run(td, base, orch_urteil(), extra=["--no-builder"], builder=None)
+    brief = Path(td) / "work/runs/TASK-O/round-1/BUILD-BRIEF.md"
+    check("O9 ohne Builder wird der Auftrag geschrieben und an den Menschen uebergeben",
+          p.returncode == 2 and brief.exists() and "BUILD-BRIEF" in brief.read_text(encoding="utf-8"),
+          f"Exit {p.returncode}")
+    (Path(td) / "a.py").write_text("def f():\n    return 2\n", encoding="utf-8")
+    git(td, "add", "."); git(td, "commit", "-qm", "von Hand")
+    p, st = orch_run(td, base, orch_urteil(), extra=["--no-builder", "--restart"], builder=None)
+    check("O9 nach dem Commit von Hand laeuft dieselbe Task bis zum Urteil durch",
+          p.returncode == 0 and st.get("outcome") == "PASS", f"Exit {p.returncode} {p.stderr[:200]}")
+
+    # --- der Reviewer bewertet nichts: das Gate faengt es, der Orchestrator traegt es weiter
+    td, base = orch_repo(BUILDER_ZWEI_RUNDEN)
+    p, st = orch_run(td, base, orch_urteil(items=[]))
+    check("O10 ein Reviewer, der nichts bewertet, erzeugt kein PASS im Gesamtlauf",
+          p.returncode == 2 and st.get("outcome") != "PASS", f"Exit {p.returncode}")
+
+
 def main() -> int:
     print("DevOS Eigentest\n")
 
@@ -675,6 +904,9 @@ def main() -> int:
 
     print("\nE2E — die ganze Kette an einem echten Repo:")
     e2e_proben()
+
+    print("\nO — Orchestrator: Runden, Budget, Zustand, Fortsetzung:")
+    orchestrator_proben()
 
     print(f"\nbestanden: {len(PASSED)} von {len(PASSED) + len(FAILED)}")
     if FAILED:
