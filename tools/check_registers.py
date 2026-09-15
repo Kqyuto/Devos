@@ -188,12 +188,34 @@ def main() -> int:
                        "nach .devos.json unter `external_ids`")
     befunde += [f"Registerform: {x}" for x in formfehler]
 
+    # Zahlen je Register — damit ein Projekt seinen Statusbericht daraus ERZEUGEN
+    # kann, statt die IDs ein zweites Mal selbst zu zaehlen. Zwei Zaehler fuer
+    # dieselbe Groesse sind zwei Wahrheiten.
+    je_register = {}
+    for pre, spec in cfg.registers.items():
+        eigene = [k for k in defs if praefix(k) == pre]
+        nummern = sorted(int(m.group(1)) for k in eigene
+                         if (m := re.search(r"(\d+)", k.split("-", 1)[-1] if "-" in k else k)))
+        je_register[pre] = {
+            "path": spec.get("path"), "kind": spec.get("kind", "row"),
+            "unique_ids": len(eigene),
+            "definitions": sum(len(defs[k]) for k in eigene),
+            "lowest": nummern[0] if nummern else None,
+            "highest": nummern[-1] if nummern else None,
+            "gaps": [n for n in range(nummern[0], nummern[-1] + 1)
+                     if n not in set(nummern)] if nummern else [],
+            "revisions": sorted(k for k in mehrfassung if praefix(k) == pre),
+            "never_referenced": sorted(k for k in nie if praefix(k) == pre),
+        }
+
     if a.json:
         print(json.dumps({"ok": not befunde, "befunde": befunde,
+                          "project": cfg.project, "root": str(root),
                           "definiert": len(defs), "referenziert": len(refs),
                           "nie_referenziert": nie,
                           "mehrfassungen": sorted(mehrfassung),
-                          "auswaertig": sorted(auswaertig)}, ensure_ascii=False, indent=2))
+                          "auswaertig": sorted(auswaertig),
+                          "register": je_register}, ensure_ascii=False, indent=2))
         return 1 if befunde else 0
 
     print(f"Registerpruefung · {cfg.project} · {len(cfg.registers)} Register")
