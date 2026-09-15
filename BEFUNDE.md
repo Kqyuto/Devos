@@ -157,6 +157,37 @@ hätte.
 
 ---
 
+## G06 — die Provenienz wird geglaubt, nicht geprüft *(OFFEN — der Pilottask)*
+
+Bei der Arbeit an G04 gefunden und **absichtlich nicht behoben**: das Gate liest den Nachweis der
+Familientrennung aus `review_dispatch.json` und prüft diese Datei selbst gegen nichts.
+
+Vorgeführt am Stand `65e869e` — die vollständige Datei lautet:
+
+```json
+{"reviewer": {"model": "gpt-5", "family": "openai"}}
+```
+
+Kein `ok`, kein `attempts`, kein `request_sha256`, kein Endpunkt, kein Zeitstempel. Das Gate führt
+sie als *„Transport-Provenienz (gemessen)"* und antwortet **Exit 0, `MERGEABLE_PENDING_HUMAN`**.
+
+Dieselbe Fehlerklasse wie G01, nur an der empfindlichsten Stelle: es geht um den Beleg der
+**Gegenmaßnahme selbst**.
+
+**Warum offen.** G06 ist der erste Pilottask des Werkzeugs
+(`work/tasks/TASK-001-devos-gate-korrektur.md`). Ihn jetzt vom selben Builder beheben zu lassen,
+der ihn gefunden hat, würde wieder eine Selbstbestätigung erzeugen — und das Werkzeug um seinen
+ersten echten Durchlauf bringen. Er ist klein, von außen prüfbar und betrifft genau das, worauf das
+Verfahren beruht: der richtige erste Gegenstand.
+
+**Was er bis dahin bedeutet.** Wer `review_dispatch.json` von Hand schreiben oder ändern kann, kann
+ein `PASS` erzeugen. Das ist dieselbe Zugriffsebene, auf der man auch `review_result.json` ändern
+könnte — es macht die Lücke nicht harmloser, aber es setzt sie ins Verhältnis: sie schützt nicht
+gegen einen Angreifer mit Schreibrecht, sie schützt gegen ein **Versehen**, und genau dagegen
+schützt sie derzeit nicht.
+
+---
+
 ## Was diese Korrekturen nicht sind
 
 Ein grüner Eigentest ist kein unabhängiges Review. Alles oben ist vom **Builder** geschrieben und

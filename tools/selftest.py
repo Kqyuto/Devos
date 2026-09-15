@@ -642,6 +642,22 @@ def main() -> int:
     check("N02 CHANGES_REQUIRED + Governance-Konflikt => CONFLICT",
           "CONFLICT" in out.get("gate", "") and code == 2, f"Exit {code} {out.get('gate')}")
 
+    print("\nS — das Werkzeug traegt keinen fremden Projektinhalt in sein eigenes Repo:")
+    with tempfile.TemporaryDirectory() as td:
+        git(td, "init", "-q", ".")
+        git(td, "config", "user.email", "t@t"); git(td, "config", "user.name", "t")
+        (Path(td) / "a.py").write_text("x = 1\n", encoding="utf-8")
+        git(td, "add", "."); git(td, "commit", "-qm", "erst")
+        (Path(td) / "a.py").write_text("x = 2\n", encoding="utf-8")
+        git(td, "add", "."); git(td, "commit", "-qm", "zweit")
+        tk = Path(td) / "T.md"; tk.write_text("# T-1 — Probe\n\n## Acceptance\n- gilt\n", encoding="utf-8")
+        ziel = HERE.parent / "work" / "fremd-probe"
+        p = subprocess.run([sys.executable, str(REQUEST), "--task", str(tk), "--root", td,
+                            "--base", "HEAD~1", "--head", "HEAD", "--out", str(ziel)],
+                           capture_output=True, text=True)
+        check("S ein Paket eines fremden Projekts darf nicht ins DevOS-Repo geschrieben werden",
+              p.returncode == 1 and not ziel.exists(), f"Exit {p.returncode} {p.stderr.strip()[:160]}")
+
     print("\nG01 — der Kontext wird strukturell geprueft, nicht nur geparst:")
     code, out = run_gate(base_result(), None, ctx_raw="[]")
     check("G01 Kontext als JSON-Liste => Befund statt Absturz",
@@ -840,6 +856,30 @@ def main() -> int:
               in c["norm_sources"]["XY-007"]["text"], json.dumps(c["norm_sources"])[:160])
         check("Abschnitt endet an der naechsten gleichrangigen Ueberschrift",
               "XY-008" not in c["norm_sources"].get("XY-007", {}).get("text", ""))
+
+    with tempfile.TemporaryDirectory() as td:
+        # ID-Formen ohne Bindestrich (G01) muessen ihr Register genauso finden.
+        git(td, "init", "-q", ".")
+        git(td, "config", "user.email", "t@t"); git(td, "config", "user.name", "t")
+        (Path(td) / ".devos.json").write_text(json.dumps({
+            "project": "p", "id_pattern": r"\b(G\d{2})\b",
+            "registers": {"G": {"path": "B.md", "kind": "heading",
+                                "heading_pattern": r"^#{1,3}\s+G\d{2}\b"}}}), encoding="utf-8")
+        (Path(td) / "B.md").write_text("## G01 — Erster\n\nWortlaut eins.\n\n## G02 — Zweiter\n",
+                                       encoding="utf-8")
+        (Path(td) / "a.py").write_text("x = 1\n", encoding="utf-8")
+        git(td, "add", "."); git(td, "commit", "-qm", "erst")
+        (Path(td) / "a.py").write_text("x = 2  # G01\n", encoding="utf-8")
+        git(td, "add", "."); git(td, "commit", "-qm", "zweit")
+        tk = Path(td) / "T.md"; tk.write_text("# T-2 — Probe\n\n## Acceptance\n- gilt\n", encoding="utf-8")
+        od = Path(td) / "rev"
+        subprocess.run([sys.executable, str(REQUEST), "--task", str(tk), "--root", td,
+                        "--base", "HEAD~1", "--head", "HEAD", "--out", str(od)],
+                       capture_output=True, text=True)
+        c = json.loads((od / "review_context.json").read_text(encoding="utf-8"))
+        check("Praefix ist der Buchstabenteil: eine ID ohne Bindestrich findet ihr Register",
+              "Wortlaut eins." in c["norm_sources"].get("G01", {}).get("text", ""),
+              json.dumps(c.get("norm_sources"))[:160] + " | " + json.dumps(c["omitted"])[:120])
 
     print("\nF05 — Prozessmessung misst, was sie behauptet:")
     with tempfile.TemporaryDirectory() as td:

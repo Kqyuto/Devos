@@ -1,2 +1,13 @@
 __pycache__/
 *.pyc
+
+# Laufende Verfahren und ihre Pakete.
+#
+# Ein Review-Paket enthaelt den vollstaendigen Diff und die Normquellen des
+# geprueften Projekts. Ist das Projekt privat, gehoert nichts davon in ein
+# oeffentliches Werkzeug-Repo. review_request.py verweigert das Schreiben
+# ausserhalb des geprueften Projekts bereits; dies ist die zweite Sperre fuer
+# den Fall, dass DevOS sich selbst prueft und jemand das Ergebnis mitcommittet.
+work/review/
+work/runs/
+work/deliveries.jsonl

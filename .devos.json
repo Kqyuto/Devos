@@ -1,0 +1,22 @@
+{
+  "schema_version": "1.0",
+  "project": "devos",
+  "id_pattern": "\\b(G\\d{2})\\b",
+  "registers": {
+    "G": {"path": "BEFUNDE.md", "kind": "heading",
+          "heading_pattern": "^#{1,3}\\s+G\\d{2}\\b"}
+  },
+  "paths": {
+    "tasks": "work/tasks",
+    "review": "work/review",
+    "runs": "work/runs",
+    "deliveries": "work/deliveries.jsonl"
+  },
+  "limits": {
+    "max_correction_rounds": 2,
+    "max_wall_minutes": 120,
+    "max_builder_calls": 3,
+    "max_reviewer_calls": 3,
+    "max_cost_usd": null
+  }
+}

@@ -148,7 +148,11 @@ def norm_sources(root: str, ids: list[str], cfg: Config) -> tuple[dict, list[dic
     if hinweis:
         return {}, [hinweis]
     for rid in ids:
-        pre = rid.split("-")[0]
+        # Der Praefix sind die fuehrenden Buchstaben: "D-144" -> D, "OQ-003" -> OQ,
+        # "G01" -> G. `rid.split("-")[0]` hat ID-Formen ohne Bindestrich nie gefunden
+        # und dafuer stillschweigend "kein Register" gemeldet.
+        m = re.match(r"^[A-Za-z]+", rid)
+        pre = m.group(0) if m else rid
         spec = cfg.registers.get(pre)
         if not spec:
             missing.append({"path": rid, "why": f"kein Register fuer Praefix {pre!r} in .devos.json"})
@@ -250,6 +254,16 @@ def main() -> int:
     head = sh("git", "-C", root, "rev-parse", a.head).strip()
 
     out = Path(root) / a.out
+    devos_root = Path(__file__).resolve().parent.parent
+    ziel = out.resolve()
+    if Path(root).resolve() != devos_root and devos_root in [ziel, *ziel.parents]:
+        print(f"[1] Das Ausgabeverzeichnis {ziel} liegt im DevOS-Repo, das gepruefte Projekt "
+              f"aber in {root}.\n"
+              "    Ein Review-Paket enthaelt den vollstaendigen Diff und die Normquellen des\n"
+              "    geprueften Projekts. In ein anderes Repo geschrieben, wandert privater\n"
+              "    Inhalt dorthin, sobald jemand dort committet. --out gehoert in das\n"
+              "    gepruefte Projekt.", file=sys.stderr)
+        return 1
     out.mkdir(parents=True, exist_ok=True)
 
     files = changed_files(root, base, head)
