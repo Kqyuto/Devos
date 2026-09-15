@@ -1,0 +1,18 @@
+{
+  "schema_version": "1.0",
+  "project": "mahoraga",
+  "id_pattern": "\\b(D-\\d{3}|OQ-\\d{3}|R-\\d{3}|DEP-\\d{1,3}|AP-\\d{2})\\b",
+  "registers": {
+    "D":   {"path": "workshop/registers/decision-register.md", "kind": "heading",
+            "heading_pattern": "^#{1,4}\\s+D-\\d{3}\\b"},
+    "OQ":  {"path": "workshop/registers/open-questions.md", "kind": "row"},
+    "R":   {"path": "workshop/registers/risk-register.md", "kind": "row"},
+    "DEP": {"path": "workshop/registers/dependency-map.md", "kind": "row"},
+    "AP":  {"path": "workshop/phases/phase-17-arbeitspaketschnitt.md", "kind": "row"}
+  },
+  "paths": {
+    "tasks": "work/tasks",
+    "review": "work/review",
+    "deliveries": "work/deliveries.jsonl"
+  }
+}

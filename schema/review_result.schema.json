@@ -1,0 +1,113 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "DevOS Review Result",
+  "description": "Rueckgabe des Adversarial Reviewers. Der Reviewer urteilt; er gibt nicht frei.",
+  "type": "object",
+  "required": ["schema_version", "task_id", "reviewed_range", "status", "blocking", "non_blocking", "context_sufficient", "reviewed"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "task_id": {"type": "string"},
+    "reviewed_range": {
+      "type": "object",
+      "required": ["base", "head"],
+      "properties": {"base": {"type": "string"}, "head": {"type": "string"}},
+      "additionalProperties": false
+    },
+    "reviewer": {
+      "type": "object",
+      "properties": {"model_family": {"type": "string"}, "model": {"type": "string"}, "at": {"type": "string"}},
+      "additionalProperties": false
+    },
+    "status": {
+      "enum": ["PASS", "CHANGES_REQUIRED", "BLOCKED", "CONFLICT", "INSUFFICIENT_CONTEXT"],
+      "description": "INSUFFICIENT_CONTEXT ist die Pflichtantwort, wenn das Paket zum Urteilen nicht reicht. Ohne diesen Wert erzeugt ein unvollstaendiges Paket ein selbstbewusstes PASS - genau die Fehlerklasse R-213."
+    },
+    "context_sufficient": {
+      "type": "boolean",
+      "description": "false zwingt status auf INSUFFICIENT_CONTEXT."
+    },
+    "missing_context": {
+      "type": "array",
+      "items": {"type": "string"},
+      "description": "Was der Reviewer gebraucht haette. Pflicht, wenn context_sufficient false ist."
+    },
+    "reviewed": {
+      "type": "object",
+      "required": ["files", "acceptance_items", "tests"],
+      "additionalProperties": false,
+      "properties": {
+        "files": {"type": "array", "items": {"type": "string"}},
+        "acceptance_items": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["item", "verdict"],
+            "additionalProperties": false,
+            "properties": {
+              "item": {"type": "string"},
+              "verdict": {"enum": ["met", "not_met", "unverifiable"]},
+              "why": {"type": "string"}
+            }
+          }
+        },
+        "tests": {
+          "type": "object",
+          "required": ["judged"],
+          "additionalProperties": false,
+          "properties": {
+            "judged": {"enum": ["adequate", "inadequate", "absent", "not_run"]},
+            "why": {"type": "string"},
+            "missing_cases": {"type": "array", "items": {"type": "string"}}
+          }
+        }
+      }
+    },
+    "blocking": {
+      "type": "array",
+      "description": "Befunde, die eine Uebernahme verhindern. Jeder braucht eine Fundstelle.",
+      "items": {
+        "type": "object",
+        "required": ["what", "where", "why"],
+        "additionalProperties": false,
+        "properties": {
+          "what": {"type": "string"},
+          "where": {"type": "string"},
+          "why": {"type": "string"},
+          "class": {"enum": ["correctness", "safety", "governance", "test-gap", "unproven-assumption", "contradiction"]},
+          "suggested_fix": {"type": "string"}
+        }
+      }
+    },
+    "non_blocking": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["what", "where"],
+        "additionalProperties": false,
+        "properties": {"what": {"type": "string"}, "where": {"type": "string"}, "why": {"type": "string"}}
+      }
+    },
+    "governance_conflicts": {
+      "type": "array",
+      "description": "Widersprueche gegen gelockte Beschluesse. Loesen CONFLICT aus, nie PASS.",
+      "items": {
+        "type": "object",
+        "required": ["id", "what"],
+        "additionalProperties": false,
+        "properties": {"id": {"type": "string"}, "what": {"type": "string"}, "where": {"type": "string"}}
+      }
+    },
+    "unproven_claims": {
+      "type": "array",
+      "description": "Behauptungen der Lieferung ohne Beleg im Paket.",
+      "items": {
+        "type": "object",
+        "required": ["claim"],
+        "additionalProperties": false,
+        "properties": {"claim": {"type": "string"}, "where": {"type": "string"}, "what_would_prove_it": {"type": "string"}}
+      }
+    },
+    "notes": {"type": "string"}
+  }
+}
