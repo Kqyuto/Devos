@@ -4,7 +4,7 @@ Dieses Dokument trennt drei Dinge, die sonst ineinanderlaufen: **geprüft an ech
 **geprüft gegen eine Attrappe** und **überhaupt nicht geprüft**. Die zweite Kategorie ist die
 gefährliche — sie sieht in einem grünen Testlauf genauso aus wie die erste.
 
-Stand: Eigentest `155 von 155`, `tools/reproduce_findings.py` Exit 0.
+Stand: Eigentest `159 von 159`, `tools/reproduce_findings.py` Exit 0.
 
 **Der kürzeste Weg von hier: [`START.md`](START.md).** Dieses Dokument ist die
 Begründung dahinter — was belegt ist und was nicht.
@@ -59,8 +59,24 @@ Das ist die **richtige Richtung** für einen Irrtum — lieber ein Fehlalarm als
 aber es ist ein Irrtum, er kostet eine Runde, und **er ist nie gegen ein echtes Modell geprüft
 worden.** Wenn beim ersten Pilotlauf etwas schiefgeht, ist das der wahrscheinlichste Ort.
 
-*Gegenmaßnahme, falls es eintritt:* nicht die Regel aufweichen, sondern die Anweisung schärfen und
-den Fall als Task schneiden. Eine Abdeckungsprüfung, die man wegkonfigurieren kann, ist keine.
+**Gegenmaßnahme, gebaut:** der Transport fragt in diesem Fall **einmal** nach — mit den fehlenden
+Punkten im Wortlaut und der ausdrücklichen Auflage, das Urteil *nicht* zu ändern, nur die Form.
+Genau wie bei einem Schemafehler, und genauso begrenzt.
+
+Drei Dinge daran sind wichtig:
+
+- Der Transport benutzt **dieselbe Vergleichsfunktion** wie das Gate (`RR.acceptance_abdeckung`).
+  Zwei Matcher für dieselbe Frage wären zwei Wahrheiten, und die zweite weicht irgendwann ab.
+- Das Gate wird dadurch **nicht** milder. Bleibt der Reviewer unvollständig, wird sein Urteil
+  durchgereicht und das Gate verweigert `PASS` wie zuvor. Der Transport repariert die Form, er
+  entscheidet nichts.
+- Die Reihenfolge ist: **erst** eine angeforderte Quelle nachreichen, **dann** nach der Abdeckung
+  fragen. Umgekehrt würde man einen Reviewer, der gerade sagt „mir fehlt Kontext", auffordern,
+  trotzdem alles zu beurteilen. Der erste Entwurf hatte genau diese Reihenfolge falsch; die
+  E2E-Probe zur Quellen-Nachforderung hat es gefangen.
+
+Proben: `E2E` × 4. Was bleibt: ob ein echtes Modell nach der Nachfrage tatsächlich zeichengenau
+kopiert. Auch das ist bis Schritt 2 unbelegt.
 
 ## 3 · Was für einen echten Durchlauf fehlt
 

@@ -27,7 +27,7 @@ def pfad() -> Path:
 def laden() -> dict:
     """(geladen, Pfad, Anzahl, Warnungen) — gibt nie einen Wert aus."""
     p = pfad()
-    bericht = {"loaded": False, "path": str(p), "set": [], "warnings": []}
+    bericht = {"loaded": False, "path": str(p), "set": [], "present": [], "warnings": []}
     if not p.exists():
         return bericht
     try:
@@ -60,6 +60,7 @@ def laden() -> dict:
             v = v[1:-1]
         if not k:
             continue
+        bericht["present"].append(k)
         if k in os.environ:
             continue                 # die Umgebung gewinnt
         os.environ[k] = v

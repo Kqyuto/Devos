@@ -65,7 +65,11 @@ def pruefe_grundlage(b: Bericht) -> None:
 def pruefe_umgebung(b: Bericht) -> dict:
     ladung = devos_env.laden()
     if ladung["loaded"]:
-        b.add("Zugangsdatei", OK, f"{ladung['path']} — {len(ladung['set'])} Variable(n) gesetzt")
+        n_datei, n_neu = len(ladung["present"]), len(ladung["set"])
+        b.add("Zugangsdatei", OK,
+              f"{ladung['path']} — {n_datei} Variable(n)"
+              + (f", davon {n_neu} neu gesetzt" if n_neu else
+                 ", alle bereits in der Umgebung (die gewinnt)"))
     else:
         b.add("Zugangsdatei", HINWEIS, f"keine unter {ladung['path']}",
               f"mkdir -p ~/.config/devos && cp {DEVOS}/templates/env.example "

@@ -64,6 +64,7 @@ Was hier schiefgehen kann und was es bedeutet:
 | `Antwort ist kein gültiges JSON-Objekt` | Das Modell hält `response_format` nicht ein und ist als Reviewer unbrauchbar — ein anderes wählen |
 | `Familientrennung VERLETZT` | Reviewer und Builder sind dieselbe Familie. Der Transport sendet dann gar nicht erst |
 | `Testkommando … Exit 1` | Erst grün bekommen. Ein roter Test lässt den Reviewer gar nicht erst rufen |
+| `n Acceptance-Punkt(e) unbewertet — eine Nachfrage` | Kein Fehler. Der Reviewer hat nicht alle Punkte beurteilt und wird **einmal** danach gefragt. Bleibt er unvollständig, entscheidet das Gate |
 
 Die Rauchprobe kostet ein paar Cent. Sie ist der einzige Punkt in dieser Anleitung, an dem
 Geld fließt — und der einzige, der beweist, dass ein **echtes** Modell mitspielt.
@@ -191,7 +192,7 @@ Durchsatz gegen 6 – 14 h/Woche. Bei weniger sagt es das und urteilt nicht.
 
 ## Der Stand in einem Satz
 
-Alles bis auf den Schlüssel ist gebaut und mit **155 Proben** belegt — aber
+Alles bis auf den Schlüssel ist gebaut und mit **159 Proben** belegt — aber
 **in der gesamten Entwicklung wurde kein einziges Mal ein echtes Modell aufgerufen.**
 Geprüft ist der Transport, das Gate, der Zustand, die Grenzen und der Index; nicht das
 Urteil. Schritt 2 ist genau der Schritt, der das ändert. Was dabei am ehesten hakt, steht

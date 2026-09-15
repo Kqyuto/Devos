@@ -333,6 +333,51 @@ def e2e_proben() -> None:
                             "--context", str(out / "review_context.json"),
                             "--dispatch", str(out / "review_dispatch.json"), "--json"],
                            capture_output=True, text=True)
+        # Abdeckungs-Reparatur: ein Reviewer, der Punkte uebergeht, wird EINMAL
+        # gefragt — nicht durchgewunken und nicht endlos.
+        halb = antwort("PASS", [{"item": acc[0], "verdict": "met"}])
+        voll = antwort("PASS", [{"item": x, "verdict": "met"} for x in acc])
+        base_url, stop, gesehen2 = mock_endpoint([halb, voll])
+        env3 = {**env2, "DEVOS_REVIEWER_BASE_URL": base_url}
+        try:
+            p2 = subprocess.run([sys.executable, str(DISPATCH),
+                                 "--request", str(out / "REVIEW-REQUEST.md"),
+                                 "--out", str(out / "r_cov.json"),
+                                 "--context", str(out / "review_context.json"), "--root", td],
+                                capture_output=True, text=True, env=env3)
+        finally:
+            stop()
+        prov2 = json.loads((out / "review_dispatch.json").read_text(encoding="utf-8"))
+        erg = json.loads((out / "r_cov.json").read_text(encoding="utf-8"))
+        check("E2E ein Reviewer, der Acceptance-Punkte uebergeht, wird EINMAL nachgefragt",
+              p2.returncode == 0 and prov2.get("coverage_repair") is True
+              and len(erg["reviewed"]["acceptance_items"]) == len(acc),
+              f"Exit {p2.returncode} repair={prov2.get('coverage_repair')}")
+        check("E2E die Nachfrage nennt die fehlenden Punkte im Wortlaut",
+              acc[1] in json.dumps(gesehen2, ensure_ascii=False)
+              and "AENDERE DEIN URTEIL NICHT" in json.dumps(gesehen2, ensure_ascii=False))
+        halb2 = antwort("PASS", [{"item": acc[0], "verdict": "met"}])
+        base_url, stop, _ = mock_endpoint([halb2, halb2, halb2, halb2])
+        env4 = {**env2, "DEVOS_REVIEWER_BASE_URL": base_url}
+        try:
+            p3 = subprocess.run([sys.executable, str(DISPATCH),
+                                 "--request", str(out / "REVIEW-REQUEST.md"),
+                                 "--out", str(out / "r_cov2.json"),
+                                 "--context", str(out / "review_context.json"), "--root", td],
+                                capture_output=True, text=True, env=env4)
+        finally:
+            stop()
+        prov3 = json.loads((out / "review_dispatch.json").read_text(encoding="utf-8"))
+        check("E2E bleibt er unvollstaendig, wird das Urteil durchgereicht — das Gate "
+              "entscheidet, nicht der Transport",
+              p3.returncode == 0 and prov3["calls"] == 2, f"Exit {p3.returncode} calls={prov3['calls']}")
+        p4 = subprocess.run([sys.executable, str(RESULT), str(out / "r_cov2.json"),
+                             "--context", str(out / "review_context.json"),
+                             "--dispatch", str(out / "review_dispatch.json"), "--json"],
+                            capture_output=True, text=True)
+        check("E2E und das Gate laesst ein unvollstaendiges Urteil nicht als PASS durch",
+              p4.returncode == 2, f"Exit {p4.returncode}")
+
         check("E2E das Gate nimmt die echte Kette an und gibt sie dem Menschen frei",
               p.returncode == 0, f"Exit {p.returncode} {p.stdout.strip()[:200]}")
 

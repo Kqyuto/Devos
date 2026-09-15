@@ -63,11 +63,13 @@ from urllib.parse import urlsplit
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import jsonschema_mini as J          # noqa: E402
 import model_family as MF            # noqa: E402
+import review_result as RR          # noqa: E402  — NUR fuer den Abdeckungsvergleich
 import devos_env                     # noqa: E402
 
 SCHEMA_PATH = Path(__file__).resolve().parent.parent / "schema" / "review_result.schema.json"
 
 MAX_AUFRUFE = 4               # harte Obergrenze: keine unbegrenzten Wiederholungen
+MAX_FORMRUNDEN = 1            # je Art: eine Reparatur, dann zaehlt die Antwort
 MAX_QUELLDATEIEN = 10
 MAX_QUELLE_BYTES = 60_000
 MAX_QUELLEN_GESAMT = 200_000
@@ -315,6 +317,7 @@ def main() -> int:
     result = None
     formreparatur = 0
     nachgefordert = False
+    abdeckung_repariert = False
 
     while len(versuche) < MAX_AUFRUFE:
         runde = len(versuche) + 1
@@ -342,6 +345,7 @@ def main() -> int:
             continue
 
         formreparatur = 0
+
         head = ((ctx or {}).get("range") or {}).get("head")
         will = [x for x in (obj.get("missing_context") or []) if isinstance(x, str)]
         if (obj.get("status") == "INSUFFICIENT_CONTEXT" and will and head
@@ -356,6 +360,43 @@ def main() -> int:
                 messages += [{"role": "assistant", "content": roh},
                              {"role": "user", "content": nachreichung_text(quellen, head)}]
                 continue
+
+        # Abdeckungs-Reparatur: der haeufigste Grund, aus dem ein sonst gutes
+        # Urteil am Gate scheitert, ist ein Reviewer, der einen Acceptance-Punkt
+        # umformuliert oder uebergeht. Das ist ein FORMFEHLER, kein Urteil — und
+        # wird wie ein Schemafehler behandelt: genau EINE Nachfrage, die die
+        # fehlenden Punkte im Wortlaut nennt.
+        #
+        # Das schwaecht das Gate NICHT ab: es rechnet danach unveraendert, und es
+        # benutzt dieselbe Vergleichsfunktion, die hier benutzt wird. Zwei
+        # Matcher fuer dieselbe Frage waeren zwei Wahrheiten.
+        gefordert = ((ctx or {}).get("task") or {}).get("acceptance") or []
+        if gefordert and not abdeckung_repariert:
+            bewertet = [i.get("item", "") for i
+                        in ((obj.get("reviewed") or {}).get("acceptance_items") or [])]
+            offen, lose = RR.acceptance_abdeckung(gefordert, bewertet)
+            if (offen or lose) and len(versuche) < MAX_AUFRUFE:
+                abdeckung_repariert = True
+                print(f"Runde {runde}: {len(offen)} Acceptance-Punkt(e) unbewertet, "
+                      f"{len(lose)} ohne Entsprechung — eine Nachfrage", file=sys.stderr)
+                teile = ["Dein Urteil deckt die Acceptance der Task nicht vollstaendig ab. "
+                         "Das Gate laesst deshalb kein PASS zu — unabhaengig davon, ob dein "
+                         "Urteil inhaltlich richtig ist."]
+                if offen:
+                    teile.append("NICHT bewertet:\n- " + "\n- ".join(offen))
+                if lose:
+                    teile.append("Bewertet, aber so nicht gefordert:\n- " + "\n- ".join(lose))
+                teile.append("Antworte erneut mit GENAU EINEM JSON-Objekt. "
+                             "`reviewed.acceptance_items` MUSS fuer JEDEN der folgenden Punkte "
+                             "genau einen Eintrag enthalten, und `item` MUSS der Wortlaut sein, "
+                             "ZEICHENGENAU kopiert:\n- " + "\n- ".join(gefordert)
+                             + "\n\nAENDERE DEIN URTEIL NICHT. Wenn du einen Punkt nicht "
+                               "beurteilen kannst, ist sein verdict `unverifiable` — das ist "
+                               "eine gueltige Antwort, Weglassen ist keine.")
+                messages += [{"role": "assistant", "content": roh},
+                             {"role": "user", "content": "\n\n".join(teile)}]
+                continue
+
         result = obj
         break
 
@@ -373,6 +414,7 @@ def main() -> int:
                 "completion_tokens": sum(v.get("completion_tokens") or 0 for v in verbrauch) or None},
             "cost_usd": kost, "cost_basis": kostengrund,
             "source_requests": [{k: v for k, v in q.items() if k != "text"} for q in quellen],
+            "coverage_repair": abdeckung_repariert,
             "ok": result is not None}
     (out.parent / "review_dispatch.json").write_text(
         json.dumps(prov, ensure_ascii=False, indent=2), encoding="utf-8")

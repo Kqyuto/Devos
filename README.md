@@ -55,7 +55,7 @@ abhängt, wird in der Praxis optional, und ein optionales Gate ist keins.
 git clone <dieses-repo> ~/devos
 export PATH="$HOME/devos/bin:$PATH"
 
-devos selftest                           # 155 Proben, Exit 1 bei Fehlschlag
+devos selftest                           # 159 Proben, Exit 1 bei Fehlschlag
 
 mkdir -p ~/.config/devos
 cp ~/devos/templates/env.example ~/.config/devos/env
