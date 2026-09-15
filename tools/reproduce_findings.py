@@ -230,7 +230,7 @@ def g04_modellfamilie_ungeprueft() -> list[dict]:
     faelle = [
         fall("G04.1 Reviewer und Builder sind dasselbe Modell",
              "kein unabhaengiges Urteil — PASS unerreichbar",
-             gate(result(), context(), gleich), (2,), "selben Modellfamilie"),
+             gate(result(), context(), gleich), (2,), "dasselbe Modell"),
         fall("G04.2 gar kein Nachweis der Familientrennung vorgelegt",
              "unbewiesene Trennung ist kein Nachweis — PASS unerreichbar",
              gate(result(), context(builder={"model": None, "family": None, "declared_via": None}),

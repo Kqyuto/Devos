@@ -30,22 +30,42 @@ def check(name: str, ok: bool, detail: str = "") -> None:
     print(f"  {'ok  ' if ok else 'FAIL'} {name}" + (f"  — {detail}" if detail and not ok else ""))
 
 
-def run_gate(result: dict, context: dict | None = None, ctx_path: str | None = None) -> tuple[int, dict]:
+SENTINEL = object()
+
+
+def run_gate(result: dict, context: dict | None = None, ctx_path: str | None = None,
+             dispatch=SENTINEL, ctx_raw: str | None = None) -> tuple[int, dict]:
+    """Ruft das Gate. `dispatch` ist standardmaessig ein nachgewiesen getrennter Lauf.
+
+    Wer die Familientrennung pruefen will, uebergibt eine eigene Provenienz oder
+    None. Alle uebrigen Proben sollen an ihrer eigenen Regel scheitern, nicht an
+    einer fehlenden Provenienz.
+    """
     with tempfile.TemporaryDirectory() as td:
         rp = Path(td) / "r.json"
         rp.write_text(json.dumps(result), encoding="utf-8")
         cmd = [sys.executable, str(RESULT), str(rp), "--json"]
-        if ctx_path is not None:
+        if ctx_raw is not None:
+            cp = Path(td) / "c.json"
+            cp.write_text(ctx_raw, encoding="utf-8")
+            cmd += ["--context", str(cp)]
+        elif ctx_path is not None:
             cmd += ["--context", ctx_path]
         elif context is not None:
             cp = Path(td) / "c.json"
             cp.write_text(json.dumps(context), encoding="utf-8")
             cmd += ["--context", str(cp)]
+        prov = ok_dispatch() if dispatch is SENTINEL else dispatch
+        if prov is not None:
+            dp = Path(td) / "d.json"
+            dp.write_text(json.dumps(prov), encoding="utf-8")
+            cmd += ["--dispatch", str(dp)]
         p = subprocess.run(cmd, capture_output=True, text=True)
         try:
             return p.returncode, json.loads(p.stdout)
         except json.JSONDecodeError:
-            return p.returncode, {"stdout": p.stdout, "stderr": p.stderr}
+            return p.returncode, {"stdout": p.stdout, "stderr": p.stderr,
+                                  "gate": "GATE HAT NICHT GEURTEILT"}
 
 
 HEAD_A = "4cbc9864e197aaaaaaaaaaaaaaaaaaaaaaaaaaaa"
@@ -53,21 +73,43 @@ HEAD_B = "4cbc9864e197bbbbbbbbbbbbbbbbbbbbbbbbbbbb"   # gleiches 12-Zeichen-Prae
 BASE_A = "1111111111111111111111111111111111111111"
 
 
+ACC = "der Punkt A gilt nachweislich"
+
+
 def base_result(**over) -> dict:
     r = {"schema_version": "1.0", "task_id": "TASK-000",
          "reviewed_range": {"base": BASE_A, "head": HEAD_A},
          "status": "PASS", "context_sufficient": True, "blocking": [], "non_blocking": [],
-         "reviewed": {"files": ["x.py"], "acceptance_items": [{"item": "A", "verdict": "met"}],
+         "reviewed": {"files": ["x.py"], "acceptance_items": [{"item": ACC, "verdict": "met"}],
                       "tests": {"judged": "adequate"}}}
     r.update(over)
     return r
 
 
 def ok_context(**over) -> dict:
-    c = {"task": {"id": "TASK-000"}, "range": {"base": BASE_A, "head": HEAD_A},
-         "tests": {"ran": True, "passed": True, "isolated": True}, "omitted": []}
+    """Ein Kontext, der das Kontextschema besteht — samt Testnachweis und Builder."""
+    c = {"schema_version": "1.1", "generated_at": "2026-09-15T00:00:00+00:00",
+         "generated_by": "selftest", "project": "probe",
+         "task": {"id": "TASK-000", "acceptance": [ACC], "forbidden": [], "decisions": []},
+         "range": {"base": BASE_A, "head": HEAD_A, "commits": []},
+         "tests": {"ran": True, "passed": True, "isolated": True,
+                   "exit_code": 0, "ran_against": HEAD_A},
+         "builder": {"model": "claude-opus-5", "family": "anthropic", "declared_via": "selftest"},
+         "files_changed": [], "diff_included": [], "referenced_ids": [], "norm_sources": {},
+         "omitted": []}
     c.update(over)
     return c
+
+
+def ok_dispatch(**over) -> dict:
+    d = {"schema_version": "1.1", "model": "gpt-5",
+         "reviewer": {"model": "gpt-5", "family": "openai", "declared_via": "Namenstabelle"},
+         "builder": {"model": "claude-opus-5", "family": "anthropic", "declared_via": "selftest"},
+         "independence": {"separated": True, "builder_family": "anthropic",
+                          "reviewer_family": "openai", "why": "verschieden"},
+         "ok": True}
+    d.update(over)
+    return d
 
 
 def git(td: str, *args: str) -> subprocess.CompletedProcess:
@@ -99,7 +141,9 @@ def mock_server(antworten: list[str], status: int = 200):
             if status != 200:
                 self.send_response(status); self.end_headers(); self.wfile.write(b"kaputt"); return
             inhalt = folge.pop(0) if folge else "{}"
-            payload = json.dumps({"choices": [{"message": {"content": inhalt}}]}).encode()
+            payload = json.dumps({"choices": [{"message": {"content": inhalt}}],
+                                  "usage": {"prompt_tokens": 1000, "completion_tokens": 200,
+                                            "total_tokens": 1200}}).encode()
             self.send_response(200)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(payload)))
@@ -184,6 +228,129 @@ def transport_proben() -> None:
               and not (Path(td) / "review_dispatch.json").exists(), f"Exit {code}")
 
 
+def mock_endpoint(antworten: list[str]):
+    """Wie mock_server, gibt aber zusaetzlich die gesehenen Anfragen zurueck."""
+    return mock_server(antworten)
+
+
+def e2e_proben() -> None:
+    """Die ganze Kette an einem echten Repo: Paket, Nachforderung, Urteil, Gate.
+
+    Die Einzelproben oben pruefen jede Regel fuer sich. Diese Probe prueft, dass
+    die Teile ueberhaupt zusammenpassen — ein Kontext, den der Erzeuger schreibt
+    und das eigene Gate nicht annimmt, faellt sonst niemandem auf.
+    """
+    with tempfile.TemporaryDirectory() as td:
+        git(td, "init", "-q", ".")
+        git(td, "config", "user.email", "t@t"); git(td, "config", "user.name", "t")
+        (Path(td) / "quelle.md").write_text("Der committete Wortlaut.\n", encoding="utf-8")
+        (Path(td) / "a.py").write_text("def f():\n    return 1\n", encoding="utf-8")
+        (Path(td) / "test_a.py").write_text("from a import f\nassert f() == 1\n", encoding="utf-8")
+        git(td, "add", "."); git(td, "commit", "-qm", "erst")
+        (Path(td) / "a.py").write_text("def f():\n    return 2\n", encoding="utf-8")
+        (Path(td) / "test_a.py").write_text("from a import f\nassert f() == 2\n", encoding="utf-8")
+        git(td, "add", "."); git(td, "commit", "-qm", "zweit")
+        head = git(td, "rev-parse", "HEAD").stdout.strip()
+        base = git(td, "rev-parse", "HEAD~1").stdout.strip()
+
+        # Nur im Arbeitsverzeichnis: darf den Reviewer NIE erreichen.
+        (Path(td) / "quelle.md").write_text("MANIPULIERT — nur lokal.\n", encoding="utf-8")
+        (Path(td) / "nur_lokal.md").write_text("existiert im geprueften Stand nicht\n", encoding="utf-8")
+
+        acc = ["f() liefert 2", "ein Test deckt den neuen Rueckgabewert ab"]
+        tk = Path(td) / "TASK-E2E.md"
+        tk.write_text("# TASK-E2E — Rueckgabewert\n\n## Acceptance\n"
+                      + "".join(f"- {x}\n" for x in acc)
+                      + "\n## Forbidden\n- nichts\n\n## Offen / Unentschieden\n- ob spaeter 3\n",
+                      encoding="utf-8")
+        out = Path(td) / "work" / "review"
+        env = {**os.environ, "DEVOS_BUILDER_MODEL": "claude-opus-5"}
+        p = subprocess.run([sys.executable, str(REQUEST), "--task", str(tk), "--root", td,
+                            "--base", base, "--head", head, "--out", "work/review",
+                            "--tests", "python3 test_a.py"],
+                           capture_output=True, text=True, env=env)
+        check("E2E Paket erzeugt", p.returncode == 0, p.stderr.strip()[:200])
+        ctx = json.loads((out / "review_context.json").read_text(encoding="utf-8"))
+
+        sys.path.insert(0, str(HERE))
+        import jsonschema_mini as J   # noqa: E402
+        fehler = J.validate(ctx, json.loads(
+            (HERE.parent / "schema" / "review_context.schema.json").read_text(encoding="utf-8")))
+        check("E2E der erzeugte Kontext besteht das eigene Kontextschema", not fehler, str(fehler[:3]))
+        check("E2E der Kontext nennt Builder-Modell und -Familie",
+              ctx["builder"]["family"] == "anthropic", json.dumps(ctx.get("builder")))
+        check("E2E der Testnachweis ist an den geprueften Head gebunden",
+              ctx["tests"]["ran_against"] == head and ctx["tests"]["exit_code"] == 0,
+              json.dumps(ctx["tests"])[:160])
+        check("E2E der Bestand des geprueften Stands liegt bei",
+              ctx["inventory"]["count"] == 3 and "quelle.md" in ctx["inventory"]["paths"],
+              json.dumps(ctx["inventory"])[:160])
+        check("E2E nur lokal vorhandene Dateien stehen NICHT im Bestand",
+              "nur_lokal.md" not in ctx["inventory"]["paths"])
+
+        def antwort(status, items, missing=None):
+            o = {"schema_version": "1.0", "task_id": "TASK-E2E",
+                 "reviewed_range": {"base": base, "head": head}, "status": status,
+                 "context_sufficient": status != "INSUFFICIENT_CONTEXT",
+                 "blocking": [], "non_blocking": [],
+                 "reviewed": {"files": ["a.py"], "acceptance_items": items,
+                              "tests": {"judged": "adequate"}}}
+            if missing:
+                o["missing_context"] = missing
+            return json.dumps(o)
+
+        nach = antwort("INSUFFICIENT_CONTEXT", [], ["quelle.md", "nur_lokal.md"])
+        gut = antwort("PASS", [{"item": x, "verdict": "met"} for x in acc])
+        base_url, stop, gesehen = mock_endpoint([nach, gut])
+        try:
+            env2 = {**env, "DEVOS_REVIEWER_API_KEY": SCHLUESSEL, "DEVOS_REVIEWER_MODEL": "gpt-5",
+                    "DEVOS_REVIEWER_BASE_URL": base_url,
+                    "DEVOS_REVIEWER_PRICE_IN": "1.25", "DEVOS_REVIEWER_PRICE_OUT": "10",
+                    "no_proxy": "127.0.0.1,localhost", "NO_PROXY": "127.0.0.1,localhost"}
+            p = subprocess.run([sys.executable, str(DISPATCH), "--request", str(out / "REVIEW-REQUEST.md"),
+                                "--out", str(out / "review_result.json"),
+                                "--context", str(out / "review_context.json"), "--root", td],
+                               capture_output=True, text=True, env=env2)
+        finally:
+            stop()
+        check("E2E Transport holt ein Urteil", p.returncode == 0, p.stderr.strip()[:200])
+        prov = json.loads((out / "review_dispatch.json").read_text(encoding="utf-8"))
+        gesendet = json.dumps(gesehen, ensure_ascii=False)
+        check("E2E der Reviewer bekommt eine nachgeforderte Quelle nachgereicht",
+              "Der committete Wortlaut." in gesendet)
+        check("E2E die Nachforderung liest aus der REVISION, nicht aus dem Arbeitsverzeichnis",
+              "MANIPULIERT" not in gesendet, "lokaler Stand ist beim Reviewer gelandet")
+        check("E2E eine nur lokal vorhandene Datei wird verweigert und der Grund genannt",
+              any(q.get("asked") == "nur_lokal.md" and q.get("refused_why")
+                  for q in prov["source_requests"]), json.dumps(prov["source_requests"])[:200])
+        check("E2E genau EINE Nachforderungsrunde, dann zaehlt das Urteil",
+              prov["calls"] == 2, f"calls={prov['calls']}")
+        check("E2E Token und Kosten werden festgehalten",
+              prov["cost_usd"] is not None and prov["usage_total"]["prompt_tokens"],
+              json.dumps(prov.get("usage_total")))
+
+        p = subprocess.run([sys.executable, str(RESULT), str(out / "review_result.json"),
+                            "--context", str(out / "review_context.json"),
+                            "--dispatch", str(out / "review_dispatch.json"), "--json"],
+                           capture_output=True, text=True)
+        check("E2E das Gate nimmt die echte Kette an und gibt sie dem Menschen frei",
+              p.returncode == 0, f"Exit {p.returncode} {p.stdout.strip()[:200]}")
+
+        # Und der umgekehrte Beweis: gleiche Familie => gar kein Versand.
+        base_url, stop, _ = mock_endpoint([gut])
+        try:
+            env3 = {**env2, "DEVOS_REVIEWER_MODEL": "claude-sonnet-5", "DEVOS_REVIEWER_BASE_URL": base_url}
+            p = subprocess.run([sys.executable, str(DISPATCH), "--request", str(out / "REVIEW-REQUEST.md"),
+                                "--out", str(out / "r2.json"),
+                                "--context", str(out / "review_context.json"), "--root", td],
+                               capture_output=True, text=True, env=env3)
+        finally:
+            stop()
+        check("E2E Reviewer aus der Builder-Familie => Versand verweigert, bevor Aufwand entsteht",
+              p.returncode == 2 and "Familie" in p.stderr and not (out / "r2.json").exists(),
+              f"Exit {p.returncode} {p.stderr.strip()[:160]}")
+
+
 def main() -> int:
     print("DevOS Eigentest\n")
 
@@ -219,19 +386,23 @@ def main() -> int:
     check("F02 blocking als Objekt statt Liste => INVALID_RESULT", code == 3, f"Exit {code}")
     code, _ = run_gate(base_result(unbekanntes_feld=1), ok_context())
     check("F02 unbekanntes Feld => INVALID_RESULT (additionalProperties)", code == 3, f"Exit {code}")
-    r = base_result(); r["reviewed"]["acceptance_items"] = [{"item": "A", "verdict": "not_met", "why": "nein"}]
+    r = base_result(); r["reviewed"]["acceptance_items"] = [{"item": ACC, "verdict": "not_met", "why": "nein"}]
     code, out = run_gate(r, ok_context())
     check("F02 PASS mit Acceptance not_met => CHANGES_REQUIRED", code == 1, f"Exit {code} {out.get('gate')}")
-    r = base_result(); r["reviewed"]["acceptance_items"] = [{"item": "A", "verdict": "unverifiable"}]
+    r = base_result(); r["reviewed"]["acceptance_items"] = [{"item": ACC, "verdict": "unverifiable"}]
     code, out = run_gate(r, ok_context())
     check("F02 Acceptance unverifiable => INSUFFICIENT_CONTEXT", code == 2, f"Exit {code} {out.get('gate')}")
 
     print("\nF03 — Tests gehoeren zum geprueften Stand:")
-    code, out = run_gate(base_result(), ok_context(tests={"ran": True, "passed": True, "isolated": False}))
+    code, out = run_gate(base_result(), ok_context(
+        tests={"ran": True, "passed": True, "isolated": False, "exit_code": 0, "ran_against": HEAD_A}))
     check("F03 nicht isolierter Testlauf => PASS ausgeschlossen", code == 1, f"Exit {code} {out.get('gate')}")
-    code, _ = run_gate(base_result(), ok_context(tests={"ran": True, "passed": False, "isolated": True}))
+    code, _ = run_gate(base_result(), ok_context(
+        tests={"ran": True, "passed": False, "isolated": True, "exit_code": 1, "ran_against": HEAD_A}))
     check("F03 fehlgeschlagene Tests => CHANGES_REQUIRED", code == 1, f"Exit {code}")
-    code, _ = run_gate(base_result(), ok_context(tests={"ran": False}))
+    code, _ = run_gate(base_result(), ok_context(
+        tests={"ran": False, "passed": False, "isolated": False, "exit_code": None,
+               "why": "kein Testkommando uebergeben"}))
     check("F03 keine Tests gelaufen => CHANGES_REQUIRED", code == 1, f"Exit {code}")
 
     print("\nN02 — Governance-Konflikt schlaegt jeden Ausgangsstatus:")
@@ -241,6 +412,119 @@ def main() -> int:
                          ok_context())
     check("N02 CHANGES_REQUIRED + Governance-Konflikt => CONFLICT",
           "CONFLICT" in out.get("gate", "") and code == 2, f"Exit {code} {out.get('gate')}")
+
+    print("\nG01 — der Kontext wird strukturell geprueft, nicht nur geparst:")
+    code, out = run_gate(base_result(), None, ctx_raw="[]")
+    check("G01 Kontext als JSON-Liste => Befund statt Absturz",
+          code == 2 and out.get("gate") != "GATE HAT NICHT GEURTEILT",
+          f"Exit {code} {out.get('gate')}")
+    code, out = run_gate(base_result(), ok_context(
+        tests={"ran": True, "passed": "false", "isolated": True, "exit_code": 0, "ran_against": HEAD_A}))
+    check("G01 passed als String \"false\" (in Python wahr) => Typfehler erkannt",
+          code == 2 and "tests.passed" in json.dumps(out), f"Exit {code} {out.get('gate')}")
+    code, out = run_gate(base_result(), ok_context(sonderfeld=1))
+    check("G01 unbekanntes Feld im Kontext => INSUFFICIENT_CONTEXT (additionalProperties)",
+          code == 2 and "sonderfeld" in json.dumps(out), f"Exit {code}")
+    c = ok_context(); c.pop("tests")
+    code, out = run_gate(base_result(), c)
+    check("G01 Kontext ohne tests-Block => Pflichtfeld fehlt, PASS unerreichbar", code == 2, f"Exit {code}")
+
+    print("\nG02 — der Reviewer muss bewerten, was gefordert war:")
+    ctx3 = ok_context()
+    ctx3["task"]["acceptance"] = [ACC, "der Punkt B gilt nachweislich", "der Punkt C gilt nachweislich"]
+    r = base_result(); r["reviewed"]["acceptance_items"] = []
+    code, out = run_gate(r, ctx3)
+    check("G02 kein einziger Punkt bewertet, drei gefordert => PASS unerreichbar",
+          code == 2 and len(out.get("acceptance_uncovered", [])) == 3, f"Exit {code}")
+    r = base_result(); r["reviewed"]["acceptance_items"] = [{"item": ACC, "verdict": "met"}]
+    code, out = run_gate(r, ctx3)
+    check("G02 1 von 3 bewertet => die zwei offenen werden BENANNT",
+          code == 2 and out.get("acceptance_uncovered") == ["der Punkt B gilt nachweislich",
+                                                            "der Punkt C gilt nachweislich"],
+          json.dumps(out.get("acceptance_uncovered"))[:120])
+    r = base_result()
+    r["reviewed"]["acceptance_items"] = [{"item": ACC, "verdict": "met"},
+                                         {"item": "etwas voellig anderes als gefordert", "verdict": "met"}]
+    code, out = run_gate(r, ok_context())
+    check("G02 Bewertung ohne Entsprechung in der Task => PASS unerreichbar",
+          code == 2 and out.get("acceptance_unbound") == ["etwas voellig anderes als gefordert"],
+          json.dumps(out.get("acceptance_unbound"))[:120])
+    r = base_result()
+    r["reviewed"]["acceptance_items"] = [{"item": "  Der Punkt A gilt NACHWEISLICH.  ", "verdict": "met"}]
+    code, out = run_gate(r, ok_context())
+    check("G02 Gross-/Kleinschreibung und Satzzeichen entscheiden nicht ueber die Abdeckung",
+          code == 0, f"Exit {code} {out.get('gate')}")
+    c = ok_context(); c["task"]["acceptance"] = []
+    r = base_result(); r["reviewed"]["acceptance_items"] = []
+    code, out = run_gate(r, c)
+    check("G02 Task ohne jeden Acceptance-Punkt => es gibt nichts zu pruefen, PASS unerreichbar",
+          code == 2, f"Exit {code} {out.get('gate')}")
+
+    print("\nG03 — der Testnachweis wird nachgerechnet, nicht geglaubt:")
+    code, out = run_gate(base_result(), ok_context(
+        tests={"ran": True, "passed": True, "isolated": True, "exit_code": 1, "ran_against": HEAD_A}))
+    check("G03 exit_code 1 bei passed=true => Widerspruch, PASS unerreichbar",
+          code == 2 and "widerspricht" in json.dumps(out), f"Exit {code} {out.get('gate')}")
+    code, out = run_gate(base_result(), ok_context(
+        tests={"ran": True, "passed": False, "isolated": True, "exit_code": 0, "ran_against": HEAD_A}))
+    check("G03 exit_code 0 bei passed=false => ebenfalls Widerspruch", code == 2, f"Exit {code}")
+    code, out = run_gate(base_result(), ok_context(
+        tests={"ran": True, "passed": True, "isolated": True, "exit_code": 0, "ran_against": HEAD_B}))
+    check("G03 Tests gegen eine andere Revision als den geprueften Head => PASS unerreichbar",
+          code == 2 and "andere Revision" in json.dumps(out), f"Exit {code} {out.get('gate')}")
+    code, out = run_gate(base_result(), ok_context(
+        tests={"ran": True, "passed": True, "isolated": True, "exit_code": 0}))
+    check("G03 Testlauf ohne Revisionsangabe => an nichts gebunden, PASS unerreichbar",
+          code == 2, f"Exit {code}")
+    code, out = run_gate(base_result(), ok_context(
+        tests={"ran": True, "passed": True, "isolated": True, "ran_against": HEAD_A}))
+    check("G03 Testlauf ohne Exit-Code => `passed` allein ist kein Nachweis",
+          code == 2 and "ohne Exit-Code" in json.dumps(out), f"Exit {code}")
+
+    print("\nG04 — die Familientrennung ist die Gegenmassnahme und wird selbst geprueft:")
+    gleich = ok_dispatch(reviewer={"model": "claude-sonnet-5", "family": "anthropic",
+                                   "declared_via": "Namenstabelle"})
+    code, out = run_gate(base_result(), ok_context(), dispatch=gleich)
+    check("G04 Reviewer aus der Builder-Familie => INDEPENDENCE_UNPROVEN, kein PASS",
+          code == 2 and "INDEPENDENCE_UNPROVEN" in out.get("gate", ""), f"Exit {code} {out.get('gate')}")
+    selbst = ok_dispatch(reviewer={"model": "claude-opus-5", "family": "anthropic",
+                                   "declared_via": "Namenstabelle"})
+    code, out = run_gate(base_result(), ok_context(), dispatch=selbst)
+    check("G04 dasselbe Modell auf beiden Seiten => kein PASS",
+          code == 2 and "dasselbe Modell" in json.dumps(out), f"Exit {code} {out.get('gate')}")
+    code, out = run_gate(base_result(), ok_context(
+        builder={"model": None, "family": None, "declared_via": None}), dispatch=None)
+    check("G04 gar kein Nachweis => nicht nachgewiesen ist nicht dasselbe wie getrennt",
+          code == 2 and "nicht nachgewiesen" in json.dumps(out), f"Exit {code} {out.get('gate')}")
+    code, out = run_gate(base_result(), ok_context(
+        builder={"model": "eigenmodell-7", "family": None, "declared_via": "Namenstabelle"}),
+        dispatch=ok_dispatch(reviewer={"model": "fremdmodell-3", "family": None,
+                                       "declared_via": "Namenstabelle"}))
+    check("G04 zwei unbekannte Modellnamen gelten NICHT als verschieden",
+          code == 2 and (out.get("independence") or {}).get("separated") is None,
+          f"Exit {code} {json.dumps(out.get('independence'))[:120]}")
+    code, out = run_gate(base_result(reviewer={"model": "gpt-5"}), ok_context(), dispatch=None)
+    u = out.get("independence") or {}
+    check("G04 Selbstauskunft des Reviewers zaehlt, wird aber als ungemessen ausgewiesen",
+          code == 0 and u.get("separated") is True and "Selbstauskunft" in u.get("evidence", ""),
+          f"Exit {code} {json.dumps(u)[:140]}")
+    code, out = run_gate(base_result(), ok_context())
+    check("G04 nachgewiesene Trennung blockiert nicht — das Gate ist kein Dauer-Nein",
+          code == 0 and (out.get("independence") or {}).get("separated") is True,
+          f"Exit {code} {out.get('gate')}")
+
+    print("\nG05 — der Schemapruefer behauptet nicht mehr, als er durchsetzt:")
+    sys.path.insert(0, str(HERE))
+    import jsonschema_mini as J   # noqa: E402
+    zuviel = [k for k in ("allOf", "anyOf", "oneOf", "not", "patternProperties") if k in J.SUPPORTED]
+    check("G05 SUPPORTED nennt kein Konstrukt, das validate() ignoriert", not zuviel, str(zuviel))
+    offen = []
+    for sd in sorted((HERE.parent / "schema").glob("*.json")):
+        offen += [f"{sd.name}: {x}" for x in J.unsupported_keywords(json.loads(sd.read_text(encoding="utf-8")))]
+    check("G05 die eigenen Schemata benutzen nur durchgesetzte Konstrukte", not offen, str(offen[:3]))
+    check("G05 type-Liste [\"integer\",\"null\"] laesst null zu und weist str ab",
+          not J.validate({"x": None}, {"type": "object", "properties": {"x": {"type": ["integer", "null"]}}})
+          and J.validate({"x": "s"}, {"type": "object", "properties": {"x": {"type": ["integer", "null"]}}}))
 
     print("\nF03/F04 — Paketerzeugung gegen ein echtes Repo:")
     with tempfile.TemporaryDirectory() as td:
@@ -388,6 +672,9 @@ def main() -> int:
 
     print("\nN01 — Transport: der Mensch traegt das Paket nicht mehr:")
     transport_proben()
+
+    print("\nE2E — die ganze Kette an einem echten Repo:")
+    e2e_proben()
 
     print(f"\nbestanden: {len(PASSED)} von {len(PASSED) + len(FAILED)}")
     if FAILED:

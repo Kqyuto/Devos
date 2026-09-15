@@ -4,18 +4,25 @@ Warum nicht `jsonschema`: ein Gate, das von einem Installationsschritt abhaengt,
 wird in der Praxis optional, und ein optionales Gate ist keins. Geprueft werden
 genau die Konstrukte, die `devos/schema/*.json` benutzt:
 type · const · enum · required · properties · additionalProperties · items.
+`type` darf eine Liste sein ("integer" oder "null") — mehr Kombinatorik nicht.
 
 Alles andere im Schema wird ignoriert — und das ist der Grund, warum diese Datei
 ihre eigene Grenze nennt: ein Schema-Konstrukt, das hier fehlt, wird NICHT
 geprueft. Wer eines ergaenzt, ergaenzt es auch hier.
+
+SUPPORTED nennt genau die Konstrukte, die `validate()` wirklich durchsetzt —
+nicht die, die einmal gemeint waren. `allOf` und `anyOf` standen hier, ohne dass
+`validate()` sie je angesehen haette: ein Schema, das sie benutzt, waere
+stillschweigend ungeprueft geblieben und `unsupported_keywords()` haette
+geschwiegen. Ein Pruefer, der mehr behauptet als er tut, ist die Fehlerklasse,
+gegen die dieses Werkzeug gebaut ist.                                (Befund G05)
 """
 from __future__ import annotations
 
 TYPES = {"object": dict, "array": list, "string": str, "boolean": bool,
          "integer": int, "number": (int, float), "null": type(None)}
 SUPPORTED = {"type", "const", "enum", "required", "properties",
-             "additionalProperties", "items", "description", "title",
-             "$schema", "allOf", "anyOf"}
+             "additionalProperties", "items", "description", "title", "$schema"}
 
 
 def unsupported_keywords(schema: dict, path: str = "") -> list[str]:
@@ -43,14 +50,18 @@ def validate(data, schema: dict, path: str = "") -> list[str]:
 
     t = schema.get("type")
     if t:
-        want = TYPES.get(t)
-        if want is not None:
-            # bool ist in Python ein int - fuer JSON sind das zwei Typen
-            if t in ("integer", "number") and isinstance(data, bool):
-                e.append(f"{p}: {t} erwartet, bool gefunden")
-                return e
-            if not isinstance(data, want):
-                e.append(f"{p}: {t} erwartet, {type(data).__name__} gefunden")
+        # Eine Liste von Typen gilt als erfuellt, sobald EINER passt.
+        kandidaten = t if isinstance(t, list) else [t]
+        bekannt = [x for x in kandidaten if x in TYPES]
+        if bekannt:
+            def passt(x: str) -> bool:
+                # bool ist in Python ein int - fuer JSON sind das zwei Typen
+                if x in ("integer", "number") and isinstance(data, bool):
+                    return False
+                return isinstance(data, TYPES[x])
+            if not any(passt(x) for x in bekannt):
+                e.append(f"{p}: {' oder '.join(bekannt)} erwartet, "
+                         f"{type(data).__name__} gefunden")
                 return e
 
     if "enum" in schema and data not in schema["enum"]:

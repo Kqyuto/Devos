@@ -1,0 +1,130 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "DevOS Review Context",
+  "description": "Was review_request.py ueber eine Lieferung festhaelt. Das Gate prueft diese Datei strukturell, bevor es sie liest: eine JSON-Datei, die parst, ist noch kein Kontext. Ohne diese Pruefung faerbte `\"passed\": \"false\"` — eine Zeichenkette, die in Python wahr ist — ein Gate gruen. (Befund G01)",
+  "type": "object",
+  "required": ["schema_version", "task", "range", "tests", "omitted"],
+  "properties": {
+    "schema_version": {"type": "string"},
+    "generated_at": {"type": "string"},
+    "generated_by": {"type": "string"},
+    "project": {"type": "string"},
+    "task": {
+      "type": "object",
+      "required": ["id"],
+      "properties": {
+        "id": {"type": "string"},
+        "title": {"type": ["string", "null"]},
+        "file": {"type": "string"},
+        "sha256": {"type": "string"},
+        "acceptance": {"type": "array", "items": {"type": "string"}},
+        "forbidden": {"type": "array", "items": {"type": "string"}},
+        "decisions": {"type": "array", "items": {"type": "string"}},
+        "open": {"type": "array", "items": {"type": "string"}}
+      },
+      "additionalProperties": false
+    },
+    "range": {
+      "type": "object",
+      "required": ["base", "head"],
+      "properties": {
+        "base": {"type": "string"},
+        "head": {"type": "string"},
+        "commits": {"type": "array", "items": {"type": "string"}}
+      },
+      "additionalProperties": false
+    },
+    "builder": {
+      "type": "object",
+      "description": "Wer gebaut hat. Ohne diese Angabe kann die Familientrennung nicht nachgewiesen werden, und ohne Nachweis ist PASS unerreichbar.",
+      "required": ["model", "family"],
+      "properties": {
+        "model": {"type": ["string", "null"]},
+        "family": {"type": ["string", "null"]},
+        "declared_via": {"type": ["string", "null"]}
+      },
+      "additionalProperties": false
+    },
+    "tests": {
+      "type": "object",
+      "description": "Der Testlauf des Pakets. `passed` ist eine Behauptung des Erzeugers; `exit_code` und `ran_against` sind der Nachweis. Das Gate rechnet beides gegeneinander.",
+      "required": ["ran", "isolated", "passed"],
+      "properties": {
+        "ran": {"type": "boolean"},
+        "isolated": {"type": "boolean"},
+        "passed": {"type": "boolean"},
+        "exit_code": {"type": ["integer", "null"]},
+        "ran_against": {"type": "string"},
+        "command": {"type": "string"},
+        "why": {"type": "string"},
+        "worktree_dirty": {"type": "boolean"},
+        "output_bytes": {"type": "integer"},
+        "output_sha256": {"type": "string"},
+        "output_file": {"type": "string"},
+        "output_tail": {"type": "string"},
+        "output_truncated_in_markdown": {"type": "boolean"}
+      },
+      "additionalProperties": false
+    },
+    "files_changed": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["path"],
+        "properties": {
+          "path": {"type": "string"},
+          "renamed_from": {"type": ["string", "null"]},
+          "added": {"type": ["integer", "null"]},
+          "removed": {"type": ["integer", "null"]},
+          "binary": {"type": "boolean"}
+        },
+        "additionalProperties": false
+      }
+    },
+    "diff_included": {"type": "array", "items": {"type": "string"}},
+    "omitted": {
+      "type": "array",
+      "description": "Pflichtbestandteil, auch leer. Was nicht mitging, mit Grund.",
+      "items": {
+        "type": "object",
+        "required": ["path", "why"],
+        "properties": {
+          "path": {"type": "string"},
+          "why": {"type": "string"},
+          "bytes": {"type": "integer"},
+          "sha256": {"type": "string"},
+          "renamed_from": {"type": ["string", "null"]}
+        },
+        "additionalProperties": false
+      }
+    },
+    "referenced_ids": {"type": "array", "items": {"type": "string"}},
+    "norm_sources": {
+      "type": "object",
+      "description": "ID -> {source, text}. Die Schluessel sind projektabhaengig, deshalb wird der Inhalt hier NICHT weiter geprueft — das ist eine benannte Grenze, keine Auslassung."
+    },
+    "inventory": {
+      "type": "object",
+      "description": "Was im geprueften Stand ueberhaupt existiert. Damit der Reviewer nicht auf die Auswahl des Builders beschraenkt ist.",
+      "required": ["at", "count", "truncated"],
+      "properties": {
+        "at": {"type": "string"},
+        "count": {"type": "integer"},
+        "truncated": {"type": "boolean"},
+        "paths": {"type": "array", "items": {"type": "string"}}
+      },
+      "additionalProperties": false
+    },
+    "counts": {
+      "type": "object",
+      "properties": {
+        "files": {"type": "integer"},
+        "diff_bytes": {"type": "integer"},
+        "omitted": {"type": "integer"},
+        "commits": {"type": "integer"}
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

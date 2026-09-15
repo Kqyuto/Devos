@@ -43,12 +43,13 @@ def main() -> int:
         if val:
             gen += [flag, val]
     gen += ["--head", a.head]
-    if schritt(1, "Review-Paket erzeugen", gen) != 0:
+    if schritt(1, "Review-Paket erzeugen", gen) != 0:  # noqa: E501
         print("\nAbbruch: Paket nicht erzeugt.", file=sys.stderr)
         return 5
 
     disp = [sys.executable, str(HERE / "review_dispatch.py"),
-            "--request", f"{a.out}/REVIEW-REQUEST.md", "--out", f"{a.out}/review_result.json"]
+            "--request", f"{a.out}/REVIEW-REQUEST.md", "--out", f"{a.out}/review_result.json",
+            "--context", f"{a.out}/review_context.json", "--root", "."]
     if a.dry_run:
         disp.append("--dry-run")
     rc = schritt(2, "an den Reviewer geben", disp)
@@ -61,8 +62,9 @@ def main() -> int:
         return 0
 
     rc = schritt(3, "Gate rechnen", [sys.executable, str(HERE / "review_result.py"),
-                                     f"{a.out}/review_result.json", "--context",
-                                     f"{a.out}/review_context.json"])
+                                     f"{a.out}/review_result.json",
+                                     "--context", f"{a.out}/review_context.json",
+                                     "--dispatch", f"{a.out}/review_dispatch.json"])
     print(f"\n{'=' * 58}\nERGEBNIS: {GATE_NAMEN.get(rc, f'Exit {rc}')}")
     print("Die Entscheidung liegt beim Menschen. Uebernommen wird von Hand.")
     return rc

@@ -32,10 +32,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from project_config import Config  # noqa: E402
+import model_family as MF           # noqa: E402
 
 MAX_FILE_BYTES = 120_000
 MAX_TOTAL_BYTES = 900_000
 MD_LOG_BYTES = 6_000
+MAX_INVENTORY = 2_000      # Pfade; darueber wird gekuerzt UND das gesagt
 
 
 def sh(*args: str, cwd: str | None = None) -> str:
@@ -80,15 +82,33 @@ def file_diff(root: str, base: str, head: str, f: dict) -> str:
 
 def read_task(path: Path) -> dict:
     text = path.read_text(encoding="utf-8")
-    task = {"id": path.stem, "file": str(path), "raw": text}
+    task = {"id": path.stem, "file": str(path), "raw": text,
+            "sha256": hashlib.sha256(text.encode("utf-8")).hexdigest()[:16]}
     m = re.search(r"^#\s*(\S+)\s*[—-]?\s*(.*)$", text, re.M)
     if m:
         task["id"], task["title"] = m.group(1), m.group(2).strip()
     for key, label in (("acceptance", "Acceptance"), ("forbidden", "Forbidden"),
-                       ("decisions", "Relevante Beschluesse")):
+                       ("decisions", r"Relevante Beschl(?:ue|ü)sse"),
+                       ("open", r"Offen\s*/\s*Unentschieden")):
         sec = re.search(rf"^##\s*{label}\s*$\n(.*?)(?=^##\s|\Z)", text, re.M | re.S)
         task[key] = _bullets(sec.group(1)) if sec else []
     return task
+
+
+def inventory(root: str, head: str) -> dict:
+    """Was im geprueften Stand ueberhaupt existiert.
+
+    Ein Reviewer, der nur sieht, was der Builder ausgewaehlt hat, prueft die
+    Auswahl des Builders. Diese Liste nennt keine Inhalte — sie sagt nur, was es
+    gibt, damit der Reviewer gezielt nachfordern kann.
+    """
+    r = subprocess.run(["git", "-C", root, "ls-tree", "-r", "--name-only", head],
+                       capture_output=True, text=True)
+    if r.returncode != 0:
+        return {"at": head, "count": 0, "truncated": False, "paths": []}
+    alle = [x for x in r.stdout.splitlines() if x]
+    return {"at": head, "count": len(alle), "truncated": len(alle) > MAX_INVENTORY,
+            "paths": sorted(alle)[:MAX_INVENTORY]}
 
 
 def _bullets(block: str) -> list[str]:
@@ -165,6 +185,14 @@ def norm_sources(root: str, ids: list[str], cfg: Config) -> tuple[dict, list[dic
     return found, missing
 
 
+def _rel(p: Path, root: str) -> str:
+    """Pfad relativ zur Wurzel — ausserhalb liegende Ausgabeverzeichnisse absolut, nie Absturz."""
+    try:
+        return str(p.relative_to(Path(root)))
+    except ValueError:
+        return str(p)
+
+
 def run_tests_isolated(root: str, head: str, cmd: str | None, out: Path) -> dict:
     """Tests im Worktree des geprueften Stands. Nie im Arbeitsverzeichnis. (F03)"""
     dirty = bool(sh("git", "-C", root, "status", "--porcelain").strip())
@@ -188,7 +216,7 @@ def run_tests_isolated(root: str, head: str, cmd: str | None, out: Path) -> dict
         return {"ran": True, "isolated": True, "ran_against": head, "worktree_dirty": dirty,
                 "command": cmd, "exit_code": p.returncode, "passed": p.returncode == 0,
                 "output_bytes": len(full.encode()), "output_sha256": hashlib.sha256(full.encode()).hexdigest()[:16],
-                "output_file": str(log.relative_to(Path(root))), "output_tail": full[-MD_LOG_BYTES:],
+                "output_file": _rel(log, root), "output_tail": full[-MD_LOG_BYTES:],
                 "output_truncated_in_markdown": len(full.encode()) > MD_LOG_BYTES}
     finally:
         subprocess.run(["git", "-C", root, "worktree", "remove", "--force", str(wt)],
@@ -269,15 +297,37 @@ def main() -> int:
     omitted += norms_missing
     commits = sh("git", "-C", root, "log", "--format=%h %s", f"{base}..{head}").splitlines()
 
+    overrides = {}
+    if cfg.vorhanden and not cfg.fehler:
+        try:
+            overrides = (json.loads(cfg.pfad.read_text(encoding="utf-8")) or {}).get("model_families") or {}
+        except Exception:
+            overrides = {}
+    builder = MF.aus_umgebung("BUILDER", overrides)
+    if not builder.get("family"):
+        omitted.append({"path": "DEVOS_BUILDER_MODEL",
+                        "why": "die Builder-Modellfamilie ist nicht bestimmbar "
+                               f"({builder.get('declared_via') or 'nicht gesetzt'}) — ohne sie "
+                               "kann die Familientrennung nicht nachgewiesen werden und das Gate "
+                               "laesst kein PASS zu"})
+
+    inv = inventory(root, head)
+    if inv["truncated"]:
+        omitted.append({"path": "<Bestandsliste>",
+                        "why": f"{inv['count']} Pfade im geprueften Stand, gelistet sind "
+                               f"{MAX_INVENTORY} — der Reviewer sieht den Bestand unvollstaendig"})
+
     ctx = {
-        "schema_version": "1.1",
+        "schema_version": "1.2",
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "generated_by": "devos/tools/review_request.py@1.1",
+        "generated_by": "devos/tools/review_request.py@1.2",
         "project": cfg.project,
-        "task": {k: task.get(k) for k in ("id", "title", "file", "acceptance", "forbidden", "decisions")},
+        "task": {k: task.get(k) for k in ("id", "title", "file", "sha256", "acceptance",
+                                          "forbidden", "decisions", "open")},
         "range": {"base": base, "head": head, "commits": commits},
         "files_changed": files, "diff_included": sorted(diffs), "omitted": omitted,
         "referenced_ids": refs, "norm_sources": norms, "tests": tests,
+        "builder": builder, "inventory": inv,
         "counts": {"files": len(files), "diff_bytes": total, "omitted": len(omitted), "commits": len(commits)},
     }
     (out / "review_context.json").write_text(json.dumps(ctx, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -336,6 +386,17 @@ def main() -> int:
         L += ["", "Ein Urteil, das von einem dieser Posten abhaengt, ist `INSUFFICIENT_CONTEXT`."]
     else:
         L += ["Nichts. Der Diff ist vollstaendig und das Testprotokoll ungekuerzt."]
+
+    L += ["", "## Bestand im geprueften Stand", "",
+          f"*{inv['count']} Dateien in `{head[:12]}`"
+          + (f", gelistet {len(inv['paths'])}" if inv["truncated"] else "")
+          + ". Du bist **nicht** auf den Diff und die Auswahl oben beschraenkt: "
+            "brauchst du eine dieser Dateien im Wortlaut, antworte mit "
+            "`INSUFFICIENT_CONTEXT` und nenne die Pfade einzeln in `missing_context`. "
+            "Sie werden dir aus genau dieser Revision nachgereicht — einmal.*", "",
+          "<details><summary>Bestandsliste</summary>", "", "```"]
+    L += inv["paths"]
+    L += ["```", "</details>", ""]
 
     L += ["", "## Diff", ""]
     for p in sorted(diffs):
