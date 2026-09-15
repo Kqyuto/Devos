@@ -625,7 +625,206 @@ def orchestrator_proben() -> None:
           p.returncode == 2 and st.get("outcome") != "PASS", f"Exit {p.returncode}")
 
 
+GRAPHIFY = HERE / "graphify_adapter.py"
 PREFLIGHT = HERE / "preflight.py"
+
+
+def mcp_server(antwort_fn, sse: bool = False, status: int = 200):
+    """Ein MCP-Server, so echt wie noetig: initialize, tools/list, tools/call."""
+    import http.server, threading
+    gesehen: list[dict] = []
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def do_POST(self):
+            n = int(self.headers.get("Content-Length", 0))
+            nachricht = json.loads(self.rfile.read(n).decode())
+            gesehen.append({"msg": nachricht,
+                            "auth": self.headers.get("Authorization", ""),
+                            "session": self.headers.get("Mcp-Session-Id")})
+            if status != 200:
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(b'{"error":"nope"}')
+                return
+            methode = nachricht.get("method")
+            if methode == "notifications/initialized":
+                self.send_response(202); self.end_headers(); return
+            if methode == "initialize":
+                ergebnis = {"protocolVersion": nachricht["params"]["protocolVersion"],
+                            "capabilities": {"tools": {}},
+                            "serverInfo": {"name": "graphify-attrappe", "version": "0.1"}}
+            elif methode == "tools/list":
+                ergebnis = {"tools": antwort_fn("tools")}
+            elif methode == "tools/call":
+                ergebnis = antwort_fn("call", nachricht["params"])
+            else:
+                ergebnis = {}
+            koerper = json.dumps({"jsonrpc": "2.0", "id": nachricht.get("id"),
+                                  "result": ergebnis})
+            if sse:
+                nutz = f"event: message\ndata: {koerper}\n\n".encode()
+                ctype = "text/event-stream"
+            else:
+                nutz = koerper.encode()
+                ctype = "application/json"
+            self.send_response(200)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Content-Length", str(len(nutz)))
+            if methode == "initialize":
+                self.send_header("Mcp-Session-Id", "sitzung-4711")
+            self.end_headers()
+            self.wfile.write(nutz)
+
+        def log_message(self, *a):
+            pass
+
+    srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return f"http://127.0.0.1:{srv.server_address[1]}/mcp", srv.shutdown, gesehen
+
+
+SUCHWERKZEUG = [{"name": "search_context",
+                 "description": "Durchsucht den privaten Index nach Kontext.",
+                 "inputSchema": {"type": "object", "required": ["query"],
+                                 "properties": {"query": {"type": "string"},
+                                                "limit": {"type": "integer"}}}}]
+
+
+def graphify_lauf(td: str, antwort_fn, sse: bool = False, status: int = 200,
+                  ids: str = "XY-007", env_extra: dict | None = None):
+    url, stop, gesehen = mcp_server(antwort_fn, sse, status)
+    try:
+        env = {**os.environ, "DEVOS_GRAPHIFY_URL": url,
+               "DEVOS_GRAPHIFY_KEY": SCHLUESSEL,
+               "no_proxy": "127.0.0.1,localhost", "NO_PROXY": "127.0.0.1,localhost"}
+        env.update(env_extra or {})
+        p = subprocess.run([sys.executable, str(GRAPHIFY), "query", "--root", td,
+                            "--rev", "HEAD", "--ids", ids],
+                           capture_output=True, text=True, env=env)
+    finally:
+        stop()
+    try:
+        return json.loads(p.stdout), p, gesehen
+    except json.JSONDecodeError:
+        return {}, p, gesehen
+
+
+def graphify_proben() -> None:
+    sys.path.insert(0, str(HERE))
+    import jsonschema_mini as J   # noqa: E402
+    td, head = index_repo()          # reg.md enthaelt "## XY-007 — Erste Norm" + "Wortlaut."
+
+    def mit(inhalt):
+        def fn(was, params=None):
+            if was == "tools":
+                return SUCHWERKZEUG
+            return inhalt
+        return fn
+
+    # --- Y1/Y2: ein echter Vorschlag wird mit EXAKTER Zeile belegt
+    treffer = {"structuredContent": {"results": [
+        {"path": "reg.md", "text": "Wortlaut.", "score": 0.9}]}}
+    erg, p, gesehen = graphify_lauf(td, mit(treffer))
+    h = erg.get("hits") or []
+    check("Y1 der Adapter verbindet, entdeckt Werkzeuge und waehlt eines",
+          erg.get("source", "").startswith("graphify:search_context"),
+          f"{erg.get('source')} · {erg.get('why')}")
+    check("Y2 ein Vorschlag wird im geprueften Stand wiedergefunden — mit exakter Zeile",
+          len(h) == 1 and h[0]["path"] == "reg.md" and h[0]["line"] == 3
+          and h[0]["rev"] == head, json.dumps(h)[:200])
+    check("Y2 jeder Treffer erfuellt den DevOS-Vertrag (id, path, line, rev)",
+          all(all(t.get(k) not in (None, "") for k in ("id", "path", "line", "rev")) for t in h))
+    check("Y1 der Sitzungskopf des Servers wird mitgefuehrt",
+          any(g["session"] == "sitzung-4711" for g in gesehen),
+          str([g["session"] for g in gesehen]))
+    check("Y1 der Schluessel taucht in der Ausgabe NICHT auf",
+          SCHLUESSEL not in p.stdout and SCHLUESSEL not in p.stderr)
+
+    # --- Y3: ein Pfad, den es im geprueften Stand nicht gibt
+    erg, _, _ = graphify_lauf(td, mit({"structuredContent": {"results": [
+        {"path": "gibt/es/nicht.md", "text": "irgendwas"}]}}))
+    check("Y3 ein veralteter Index kann nichts durchschmuggeln: unbekannter Pfad wird verworfen",
+          not erg["hits"] and erg["rejected"]
+          and "existiert in" in erg["rejected"][0]["why"], json.dumps(erg)[:220])
+
+    # --- Y4: echter Pfad, aber Inhalt aus einer aelteren Fassung
+    erg, _, _ = graphify_lauf(td, mit({"structuredContent": {"results": [
+        {"path": "reg.md", "text": "Diesen Satz gab es hier nie und XY-999 auch nicht"}]}}),
+        ids="XY-999")
+    check("Y4 echter Pfad, aber Schnipsel nicht im geprueften Stand => verworfen",
+          not erg["hits"] and erg["rejected"], json.dumps(erg)[:220])
+
+    # --- Y5: der Dienst liefert nur Prosa
+    erg, _, _ = graphify_lauf(td, mit({"content": [
+        {"type": "text", "text": "XY-007 regelt die Normfrage. Mehr kann ich nicht sagen."}]}))
+    check("Y5 nur Prosa ohne Fundstelle => keine Treffer, kein Absturz",
+          erg["hits"] == [] and erg["coverage"]["verified"] == 0, json.dumps(erg)[:200])
+
+    # --- Y6: Pfade im Fliesstext werden erkannt und verifiziert
+    erg, _, _ = graphify_lauf(td, mit({"content": [
+        {"type": "text", "text": "Siehe `reg.md` — dort steht der Wortlaut zu XY-007."}]}))
+    check("Y6 ein Pfad im Fliesstext wird erkannt und am Original verifiziert",
+          len(erg["hits"]) == 1 and erg["hits"][0]["path"] == "reg.md",
+          json.dumps(erg["hits"])[:200])
+
+    # --- Y7: SSE-Antwort
+    erg, _, _ = graphify_lauf(td, mit(treffer), sse=True)
+    check("Y7 eine Antwort als Ereignisstrom (SSE) wird verstanden",
+          len(erg.get("hits") or []) == 1, json.dumps(erg)[:200])
+
+    # --- Y8: Server antwortet 401
+    erg, p, _ = graphify_lauf(td, mit(treffer), status=401)
+    check("Y8 ein abgelehnter Schluessel ergibt eine klare Meldung, keinen Absturz",
+          erg["hits"] == [] and "Schluessel" in erg["why"], json.dumps(erg)[:200])
+    check("Y8 und auch dann steht der Schluessel nirgends in der Ausgabe",
+          SCHLUESSEL not in p.stdout and SCHLUESSEL not in p.stderr)
+
+    # --- Y9: Werkzeug mit unfuellbarem Pflichtfeld
+    seltsam = [{"name": "traverse",
+                "inputSchema": {"type": "object", "required": ["node_id", "query"],
+                                "properties": {"node_id": {"type": "string"},
+                                               "query": {"type": "string"}}}}]
+    erg, _, _ = graphify_lauf(td, lambda was, params=None: seltsam if was == "tools" else {})
+    check("Y9 ein Pflichtfeld, das der Adapter nicht fuellen kann, wird BENANNT statt geraten",
+          not erg["hits"] and "node_id" in erg["why"], erg.get("why", "")[:160])
+    erg, _, _ = graphify_lauf(td, lambda was, params=None: seltsam if was == "tools" else treffer,
+                              env_extra={"DEVOS_GRAPHIFY_ARGS": '{"node_id": "XY-007"}'})
+    check("Y9 mit DEVOS_GRAPHIFY_ARGS laesst es sich ergaenzen",
+          len(erg.get("hits") or []) == 1, json.dumps(erg)[:200])
+
+    # --- Y10: gezielte Werkzeugwahl
+    zwei = SUCHWERKZEUG + [{"name": "ingest",
+                            "inputSchema": {"type": "object", "properties": {}}}]
+    erg, _, _ = graphify_lauf(td, lambda was, params=None: zwei if was == "tools" else treffer,
+                              env_extra={"DEVOS_GRAPHIFY_TOOL": "gibtsnicht"})
+    check("Y10 ein nicht vorhandenes Werkzeug wird benannt, nicht stillschweigend ersetzt",
+          not erg["hits"] and "gibt es auf diesem Server nicht" in erg["why"],
+          erg.get("why", "")[:140])
+
+    # --- Y11: der Adapter erfuellt den DevOS-Vertrag im echten Paket
+    url, stop, _ = mcp_server(mit(treffer))
+    try:
+        tk = Path(td) / "T.md"
+        tk.write_text("# T-G — Probe\n\n## Acceptance\n- XY-007 gilt\n", encoding="utf-8")
+        env = {**os.environ, "DEVOS_BUILDER_MODEL": "claude-opus-5",
+               "DEVOS_GRAPH_CMD": f"{sys.executable} {GRAPHIFY}",
+               "DEVOS_GRAPHIFY_URL": url, "DEVOS_GRAPHIFY_KEY": SCHLUESSEL,
+               "no_proxy": "127.0.0.1,localhost", "NO_PROXY": "127.0.0.1,localhost"}
+        subprocess.run([sys.executable, str(REQUEST), "--task", str(tk), "--root", td,
+                        "--base", "HEAD~1", "--head", "HEAD", "--out", "revg"],
+                       capture_output=True, text=True, env=env)
+    finally:
+        stop()
+    c = json.loads((Path(td) / "revg" / "review_context.json").read_text(encoding="utf-8"))
+    g = c["graph"]
+    check("Y11 im echten Paket wird Graphify als Quelle gefuehrt und benutzt",
+          g["used"] is True and str(g["source"]).startswith("graphify"),
+          json.dumps({k: g[k] for k in ("used", "source", "why")})[:220])
+    fehler = J.validate(c, json.loads(
+        (HERE.parent / "schema" / "review_context.schema.json").read_text(encoding="utf-8")))
+    check("Y11 der Kontext mit Graphify-Treffern besteht das Kontextschema",
+          not fehler, str(fehler[:2]))
 INDEX = HERE / "context_index.py"
 
 
@@ -1263,6 +1462,9 @@ def main() -> int:
 
     print("\nX — Kontextindex: findet, entscheidet nicht, begrenzt nichts:")
     indexproben()
+
+    print("\nY — Graphify (MCP): der Dienst schlaegt vor, das Original entscheidet:")
+    graphify_proben()
 
     print("\nM — Messung: was eine Maschine nicht messen kann, erfindet sie nicht:")
     messproben()

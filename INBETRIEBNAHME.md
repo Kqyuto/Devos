@@ -4,7 +4,7 @@ Dieses Dokument trennt drei Dinge, die sonst ineinanderlaufen: **geprüft an ech
 **geprüft gegen eine Attrappe** und **überhaupt nicht geprüft**. Die zweite Kategorie ist die
 gefährliche — sie sieht in einem grünen Testlauf genauso aus wie die erste.
 
-Stand: Eigentest `159 von 159`, `tools/reproduce_findings.py` Exit 0.
+Stand: Eigentest `176 von 176`, `tools/reproduce_findings.py` Exit 0.
 
 **Der kürzeste Weg von hier: [`START.md`](START.md).** Dieses Dokument ist die
 Begründung dahinter — was belegt ist und was nicht.
@@ -82,7 +82,7 @@ kopiert. Auch das ist bis Schritt 2 unbelegt.
 
 | # | Fehlt | Warum es blockiert | Woran man erkennt, dass es da ist |
 |---|---|---|---|
-| 1 | **Ein Reviewer-Zugang** — `DEVOS_REVIEWER_API_KEY` und ein erreichbarer Endpunkt | Ohne ihn gibt es kein zweites Urteil, und das ganze Verfahren ist eine Selbstbestätigung | `review_dispatch.py` endet mit Exit 0 statt 2 |
+| 1 | **Ein Reviewer-Zugang** — `DEVOS_REVIEWER_API_KEY` und ein erreichbarer Endpunkt. Gemeint ist ein **API-Schlüssel** (`sk-…`), nicht ein ChatGPT-Abo oder -Connector: DevOS ruft `POST /v1/chat/completions` selbst auf | Ohne ihn gibt es kein zweites Urteil, und das ganze Verfahren ist eine Selbstbestätigung | `review_dispatch.py` endet mit Exit 0 statt 2 |
 | 2 | **Ein ausführender Rechner** | Die Umgebung, in der dies gebaut wurde, ist flüchtig und hat **keinen Netzzugang zu Modellanbietern**: `api.openai.com` antwortet hier `403 Forbidden` am Proxy. Ein Runner muss dort stehen, wo Schlüssel und Netz sind | Ein `run_task.py`-Lauf, der Exit 0 oder 1 liefert statt Exit 5 |
 | 3 | **Ein Klon von mahoraga auf dem Runner mit Push-Recht** | mahoraga ist privat. Die GitHub-Verbindung allein startet keine Modellläufe | `devos preflight --root ~/mahoraga` ist grün |
 | 4 | **Token-Preise** — `DEVOS_REVIEWER_PRICE_IN/OUT` | Ohne sie werden Token gezählt, aber das Kostenlimit **bindet nicht**. Das Werkzeug sagt das bei jedem Lauf | `spent.cost_usd` ist nicht `null` |
@@ -127,16 +127,36 @@ Laufzuständen. Von Hand bleiben **zwei Sorten Zeilen** — und beide bewusst:
 Nach drei vollständig gemessenen Lieferungen rechnet `delivery_metrics.py` Menschenanteil und
 Durchsatz gegen 6 – 14 h/Woche. Bei weniger als drei sagt es das und urteilt nicht.
 
-## 5 · Graphify — die Stelle ist gebaut, das Produkt ist offen
+## 5 · Graphify — angebunden, aber am Original verifiziert
 
-**Ein Graphify-Repository existiert in diesem Konto nicht** (geprüft: `Devos`, `mahoraga`,
-`Trading-Os`, `kqyutos-os`, `Assay`). Welches konkrete Werkzeug gemeint ist, ist damit
-weiterhin **unverifiziert** — und das ist die eine Frage, die ich nicht selbst beantworten
-kann.
+Graphify ist ein **remote MCP-Server** (`https://api.graphify.net/mcp`, Bearer-Auth). Die
+Anbindung ist gebaut: `tools/mcp_client.py` (Streamable HTTP, stdlib only) und
+`tools/graphify_adapter.py`.
 
-Gebaut ist deshalb beides: die **Stelle**, an der Graphify eintritt, und eine **eingebaute
-Kontextsuche**, die sie heute schon ausfüllt. Der Ablauf braucht auf keiner Stufe ein
-externes Produkt.
+**Was ich nicht konnte:** den Dienst tatsächlich fragen. Der Proxy dieser Umgebung lehnt
+`api.graphify.net:443` ab (`connect_rejected: policy denial`) — dieselbe Sperre wie bei
+OpenAI. Die Werkzeugnamen und Eingabeschemata von Graphify sind mir deshalb **unbekannt**,
+und ich habe sie nicht geraten. Stattdessen entdeckt der Adapter sie zur Laufzeit
+(`tools/list`) und `devos graphify probe` zeigt sie im Klartext, samt der Angabe, welches
+Werkzeug er wählen würde und mit welchen Argumenten. Das ist der erste Befehl nach dem
+Eintragen des Graphify-Schlüssels.
+
+**Der eigentliche Entwurf ist die umgekehrte Beweislast.** Graphify kann nicht wissen,
+welchen Commit du prüfst — sein Index ist ein eigener Stand. Also wird ihm nicht geglaubt:
+
+```
+Graphify schlägt vor  →  der Adapter sucht den Vorschlag im Repo bei der
+                         GEPRÜFTEN Revision  →  nur was er dort findet, wird
+                         zum Treffer, mit exakter Zeile
+```
+
+Drei Folgen, und alle drei sind der Punkt: ein veralteter Graphify-Index kann nichts
+durchschmuggeln; das Ausgabeformat darf sich ändern, ohne dass etwas bricht; und ein Treffer
+ist nie eine Behauptung des Dienstes, sondern eine Stelle im Original.
+
+Daneben bleibt die **eingebaute Kontextsuche** (`tools/context_index.py`). Sie füllt die
+Stelle ohne jeden externen Dienst aus — gegen die echten mahoraga-Register: 290 IDs, 384
+Kanten. Der Ablauf braucht auf keiner Stufe ein externes Produkt.
 
 `tools/context_index.py` — revisionsgebunden aus `git show <rev>:<pfad>` gebaut, nie aus dem
 Arbeitsverzeichnis. Gegen die echten mahoraga-Register: 290 IDs, 384 Kanten, 23 von 24
@@ -156,8 +176,11 @@ Die fünf Regeln aus dem Auftrag sind Code, nicht Absicht — mit der jeweiligen
 **Der Anbietervertrag** steht in `tools/context_index.py`: stdin
 `{"op":"query","rev":…,"ids":[…],"depth":…}`, stdout
 `{"source":…,"built_for_rev":…,"stale":…,"hits":[{"id","path","line","rev"}]}`.
-Ein echtes Graphify tritt über `DEVOS_GRAPH_CMD` an diese Stelle — ohne eine Zeile im
-Verfahren zu ändern.
+Graphify tritt über `DEVOS_GRAPH_CMD` an diese Stelle — ohne eine Zeile im Verfahren zu
+ändern. Proben `Y1`–`Y11` fahren den Adapter gegen einen lokalen MCP-Server: unbekannter
+Pfad verworfen, Schnipsel aus älterer Fassung verworfen, reine Prosa ergibt null Treffer
+statt eines Fehlers, SSE verstanden, Sitzungskopf mitgeführt, Schlüssel nie in der Ausgabe —
+auch nicht im Fehlerfall.
 
 **Die Messung mit und ohne** ist vorbereitet: `--graph off` erzeugt den Vergleichslauf,
 `run_state.json` hält je Runde fest, ob Hinweise benutzt wurden, `delivery_metrics` stellt
@@ -165,6 +188,8 @@ beide Gruppen nebeneinander — und sagt „n ist klein, das ist ein Hinweis, ke
 solange es so ist. Der Indexaufbau läuft in jedem Lauf mit und steckt damit in der
 gemessenen Durchlaufzeit.
 
-**Was weiterhin offen ist:** ob das konkret gemeinte Graphify mehr kann als dieser
-eingebaute Index — und ob sich der Unterschied in den gemessenen Größen zeigt. Das
-entscheidet der Vergleich über 3 – 5 Tasks, nicht eine Meinung.
+**Was weiterhin offen ist:** ob Graphify mehr findet als der eingebaute Index — und ob sich
+der Unterschied in den gemessenen Größen zeigt. Das entscheidet der Vergleich über 3 – 5
+Tasks, nicht eine Meinung. Und ob der Adapter Graphifys tatsächliches Antwortformat trifft:
+er ist bewusst großzügig beim Einsammeln und streng beim Verifizieren, aber gesehen habe ich
+dieses Format nie. `devos graphify probe` ist der Moment, in dem sich das klärt.

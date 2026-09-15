@@ -6,6 +6,7 @@
     devos review --task ...       Nur ein Review, ohne Laufzustand.
     devos gate   <result>         Nur das Gate rechnen.
     devos index  build|query|status
+    devos graphify probe          Was kann der Graphify-MCP wirklich? (fragt ihn)
     devos check                   Registerintegritaet (taugt als Testkommando).
     devos handover --state ...    Entscheidungsblatt erzeugen.
     devos metrics [--from-run …]  Prozessmetriken.
@@ -33,6 +34,7 @@ BEFEHLE = {
     "gate": "review_result.py", "index": "context_index.py", "check": "check_registers.py",
     "handover": "handover.py", "metrics": "delivery_metrics.py", "selftest": "selftest.py",
     "findings": "reproduce_findings.py", "request": "review_request.py",
+    "graphify": "graphify_adapter.py",
     "dispatch": "review_dispatch.py",
 }
 

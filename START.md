@@ -24,6 +24,13 @@ Auszufüllen ist **eine Zeile**:
 DEVOS_REVIEWER_API_KEY=sk-...
 ```
 
+> **Wichtig, weil es leicht verwechselt wird:** gemeint ist ein **API-Schlüssel**
+> von `platform.openai.com`. Ein ChatGPT-Abo oder ein ChatGPT-*Connector* ist etwas
+> anderes — der gibt einer Oberfläche Zugriff, aber keinem Programm einen Schlüssel.
+> DevOS ruft `POST /v1/chat/completions` selbst auf; dafür braucht es `sk-…`.
+> Jede OpenAI-kompatible Schnittstelle geht auch (Azure, OpenRouter, ein eigener
+> Endpunkt) — dann zusätzlich `DEVOS_REVIEWER_BASE_URL` setzen.
+
 Der Rest der Datei ist vorbelegt (`gpt-5` als Reviewer, `claude-opus-5` als Builder,
 Claude Code als Builder-Adapter). Zwei Zeilen lohnen sich trotzdem:
 
@@ -153,17 +160,48 @@ bei. Fünf Regeln sind dabei Code, nicht Absicht:
    nie als Nachweis. Das Werkzeug leitet selbst keine ab.
 5. Fällt er ganz weg, läuft das Verfahren unverändert weiter.
 
-**Ein echtes Graphify tritt an seine Stelle, sobald es feststeht:**
+### Graphify anschließen
+
+Graphify ist ein **MCP-Server**, kein Kommandozeilenwerkzeug. Der Adapter dafür ist gebaut:
 
 ```
-DEVOS_GRAPH_CMD="graphify devos-adapter"
+DEVOS_GRAPHIFY_KEY=...
+DEVOS_GRAPHIFY_URL=https://api.graphify.net/mcp
+DEVOS_GRAPH_CMD=python3 $DEVOS_HOME/tools/graphify_adapter.py
 ```
 
-Das Kommando bekommt auf stdin `{"op":"query","rev":"<SHA>","ids":[…],"depth":1}` und
-antwortet mit `{"source":…,"built_for_rev":…,"stale":…,"hits":[{"id","path","line","rev"}]}`.
-Alles, was diesen Vertrag verletzt, wird verworfen und gemeldet — auch und gerade von einem
-externen Anbieter. Der Vertrag steht in `tools/context_index.py`; Proben `X3`/`X4` halten
-ihn fest.
+Dann **zuerst**:
+
+```bash
+devos graphify probe
+```
+
+Das fragt den Server, welche Werkzeuge er hat, und zeigt deren Eingabeschemata im Klartext —
+samt der Angabe, welches der Adapter wählen würde und mit welchen Argumenten. Ich konnte das
+nicht vorwegnehmen: `api.graphify.net` ist aus dieser Umgebung nicht erreichbar
+(`connect_rejected: policy denial`), und **einen Werkzeugnamen zu raten wäre genau die Sorte
+Annahme, die dieses Verfahren sonst überall verbietet.** Passt die Wahl nicht:
+`DEVOS_GRAPHIFY_TOOL=<name>`, fehlen Pflichtfelder: `DEVOS_GRAPHIFY_ARGS={"feld":"wert"}` —
+`probe` sagt beides wörtlich an.
+
+**Wie der Adapter Graphifys Antworten behandelt**, und das ist der eigentliche Punkt:
+
+```
+Graphify schlägt vor  →  der Adapter sucht den Vorschlag im Repo
+                         bei der GEPRÜFTEN Revision  →  nur was er dort findet,
+                         wird zum Treffer, mit exakter Zeile
+```
+
+Graphify kann gar nicht wissen, welchen Commit du gerade prüfst. Also wird ihm nicht
+geglaubt: jeder Vorschlag wird gegen `git show <rev>:<pfad>` nachgeschlagen. Was dort nicht
+steht, wird **nicht geliefert**, sondern als *nicht auffindbar* gemeldet. Ein veralteter
+Graphify-Index kann damit nichts durchschmuggeln, und das Ausgabeformat darf sich ändern,
+ohne dass etwas bricht — entschieden wird am Original.
+
+Proben `Y1`–`Y11` gegen einen lokalen MCP-Server halten das fest, darunter: unbekannter Pfad
+wird verworfen, Schnipsel aus einer älteren Fassung wird verworfen, reine Prosa ergibt null
+Treffer statt eines Fehlers, SSE-Antworten werden verstanden, und der Schlüssel taucht in
+keiner Ausgabe auf — auch nicht im Fehlerfall.
 
 ---
 
@@ -192,7 +230,7 @@ Durchsatz gegen 6 – 14 h/Woche. Bei weniger sagt es das und urteilt nicht.
 
 ## Der Stand in einem Satz
 
-Alles bis auf den Schlüssel ist gebaut und mit **159 Proben** belegt — aber
+Alles bis auf den Schlüssel ist gebaut und mit **176 Proben** belegt — aber
 **in der gesamten Entwicklung wurde kein einziges Mal ein echtes Modell aufgerufen.**
 Geprüft ist der Transport, das Gate, der Zustand, die Grenzen und der Index; nicht das
 Urteil. Schritt 2 ist genau der Schritt, der das ändert. Was dabei am ehesten hakt, steht

@@ -192,6 +192,24 @@ def pruefe_projekt(b: Bericht, root: str, tests: str | None) -> Config:
     else:
         b.add("Laufmaterial ignoriert", OK, "work/review/ und work/runs/ sind ausgenommen")
 
+    # Graphify: eine Erweiterung. Sie blockiert nie — auch dann nicht, wenn sie
+    # kaputt ist. Ein Kontextabruf, der einen Lauf verhindern kann, waere keine
+    # Erweiterung mehr, sondern eine Abhaengigkeit.
+    gkey = os.environ.get("DEVOS_GRAPHIFY_KEY") or os.environ.get("GRAPHIFY_API_KEY")
+    if not gkey:
+        b.add("Graphify (MCP)", HINWEIS, "kein Schluessel — der eingebaute Index wird benutzt",
+              f"DEVOS_GRAPHIFY_KEY=… in ~/.config/devos/env, dann `devos graphify probe`",
+              blockierend=False)
+    else:
+        p = subprocess.run([sys.executable, str(HERE / "graphify_adapter.py"), "probe"],
+                           capture_output=True, text=True, timeout=90)
+        erste = (p.stdout.strip().splitlines() or [""])[0]
+        b.add("Graphify (MCP)", OK if p.returncode == 0 else HINWEIS,
+              erste[:90] if p.returncode == 0 else
+              f"nicht erreichbar: {(p.stderr or p.stdout).strip()[:90]}",
+              "`devos graphify probe` zeigt Werkzeuge und Schemata im Klartext",
+              blockierend=False)
+
     # Kontextindex: reine Information, blockiert nie
     p = subprocess.run([sys.executable, str(HERE / "context_index.py"), "status",
                         "--root", root, "--rev", "HEAD"], capture_output=True, text=True)
