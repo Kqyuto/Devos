@@ -212,6 +212,18 @@ und Metriken gehören in das geprüfte Projekt und stehen dort in dessen `.gitig
 
 ---
 
+## Was läuft, was simuliert ist, was fehlt
+
+In dieser Entwicklung wurde **kein einziges Mal ein echtes Modell aufgerufen.** Jede
+Reviewer-Antwort in jeder Probe kam von einem lokalen HTTP-Server, jeder Builder war ein
+Bash-Skript. Das prüft den Transport, das Gate, den Zustand und die Grenzen — es prüft
+**nicht**, ob ein echtes Modell brauchbare Befunde liefert.
+
+[`INBETRIEBNAHME.md`](INBETRIEBNAHME.md) trennt die drei Kategorien vollständig und nennt
+die fünf Voraussetzungen, die für einen echten Durchlauf noch fehlen.
+
+---
+
 ## Herkunft
 
 Entstanden aus einem Assay des Projekts „Kapital 2026". Dessen teuerste Fehlerklasse

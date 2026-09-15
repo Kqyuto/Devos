@@ -314,7 +314,8 @@ def main() -> int:
             "tests_cmd": a.tests, "created_at": jetzt(), "started_epoch": time.time(),
             "limits": limits,
             "spent": {"corrections": 0, "builder_calls": 0, "reviewer_calls": 0,
-                      "wall_minutes": 0.0, "cost_usd": None},
+                      "wall_minutes": 0.0, "cost_usd": None,
+                      "prompt_tokens": 0, "completion_tokens": 0},
             "state": "BUILD", "rounds": [], "outcome": None, "stop_reason": None,
         }
         lauf.speichern()
@@ -470,6 +471,9 @@ def main() -> int:
                     if pv.get("cost_usd") is not None:
                         lauf.d["spent"]["cost_usd"] = round(
                             (lauf.d["spent"].get("cost_usd") or 0) + pv["cost_usd"], 6)
+                    u = pv.get("usage_total") or {}
+                    for k in ("prompt_tokens", "completion_tokens"):
+                        lauf.d["spent"][k] = (lauf.d["spent"].get(k) or 0) + (u.get(k) or 0)
                 except Exception:
                     pass
             lauf.buchen(r, "review", status="ok", head=head,

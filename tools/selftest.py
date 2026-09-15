@@ -580,6 +580,77 @@ def orchestrator_proben() -> None:
           p.returncode == 2 and st.get("outcome") != "PASS", f"Exit {p.returncode}")
 
 
+def messproben() -> None:
+    """Die Messung muss den Unterschied zwischen 'null' und 'nicht gemessen' halten."""
+    with tempfile.TemporaryDirectory() as td:
+        git(td, "init", "-q", ".")
+        git(td, "config", "user.email", "t@t"); git(td, "config", "user.name", "t")
+        (Path(td) / "a.txt").write_text("x\n", encoding="utf-8")
+        git(td, "add", "."); git(td, "commit", "-qm", "erst")
+        b = git(td, "rev-parse", "HEAD").stdout.strip()
+        (Path(td) / "b.txt").write_text("y\n", encoding="utf-8")
+        git(td, "add", "."); git(td, "commit", "-qm", "zweit")
+        h = git(td, "rev-parse", "HEAD").stdout.strip()
+        log = Path(td) / "d.jsonl"
+        log.write_text("\n".join(json.dumps(x) for x in [
+            {"delivery": "M1", "event": "task_opened", "at": "2026-09-15T09:00:00Z", "base": b,
+             "scope": "full"},
+            {"delivery": "M1", "event": "builder_minutes", "minutes": 60},
+            {"delivery": "M1", "event": "reviewer_minutes", "minutes": 10},
+            {"delivery": "M1", "event": "model_usage", "prompt_tokens": 48000,
+             "completion_tokens": 3100, "cost_usd": 0.09},
+            {"delivery": "M1", "event": "accepted", "at": "2026-09-15T13:00:00Z", "commit": h},
+            {"delivery": "M2", "event": "task_opened", "at": "2026-09-16T09:00:00Z", "base": b,
+             "scope": "full"},
+            {"delivery": "M2", "event": "human_minutes", "minutes": 30},
+            {"delivery": "M2", "event": "builder_minutes", "minutes": 70},
+            {"delivery": "M2", "event": "escaped_defect", "what": "Nullteiler in der Bewertung",
+             "found_at": "2026-10-02", "where": "bewertung.py:40"},
+            {"delivery": "M2", "event": "accepted", "at": "2026-09-16T11:00:00Z", "commit": h},
+        ]), encoding="utf-8")
+        p = subprocess.run([sys.executable, str(METRICS), "--log", str(log), "--root", td, "--json"],
+                           capture_output=True, text=True)
+        js = json.loads(p.stdout)
+        m1 = next(x for x in js["deliveries"] if x["delivery"] == "M1")
+        m2 = next(x for x in js["deliveries"] if x["delivery"] == "M2")
+        check("M nicht gebuchte Menschenzeit ist NICHT null Prozent",
+              m1["human_share"] is None and m1["human_booked"] is False, str(m1["human_share"]))
+        check("M eine Lieferung ohne gebuchte Menschenzeit gilt nicht als vollstaendig gemessen",
+              m1["complete"] is False and m2["complete"] is True,
+              f"M1={m1['complete']} M2={m2['complete']}")
+        check("M Modellnutzung wird in Token und USD gefuehrt",
+              m1["prompt_tokens"] == 48000 and m1["cost_usd"] == 0.09,
+              json.dumps({k: m1[k] for k in ("prompt_tokens", "cost_usd")}))
+        check("M nachtraeglich entdeckte Fehler werden je Lieferung gefuehrt",
+              m2["escaped_defect_count"] == 1
+              and m2["escaped_defects"][0]["where"] == "bewertung.py:40",
+              json.dumps(m2["escaped_defects"])[:140])
+        txt = subprocess.run([sys.executable, str(METRICS), "--log", str(log), "--root", td],
+                             capture_output=True, text=True).stdout
+        check("M der Bericht benennt die ungebuchte Menschenzeit als Befund",
+              "Menschenzeit nicht" in txt and "nicht gebucht" in txt)
+        check("M der Bericht fuehrt die spaeter gefundenen Fehler eigens auf",
+              "Nachtraeglich entdeckte Fehler" in txt and "bewertung.py:40" in txt)
+
+    # --from-run: erzeugt das Maschinelle, erfindet das Menschliche nicht
+    td, base = orch_repo(BUILDER_ZWEI_RUNDEN)
+    orch_run(td, base, orch_urteil())
+    p = subprocess.run([sys.executable, str(METRICS), "--from-run",
+                        str(Path(td) / "work" / "runs")], capture_output=True, text=True)
+    zeilen = [json.loads(x) for x in p.stdout.splitlines() if x.strip()]
+    ereignisse = [z.get("event") for z in zeilen if "event" in z]
+    check("M --from-run erzeugt die maschinell messbaren Ereignisse",
+          p.returncode == 0 and "task_opened" in ereignisse and "review_round" in ereignisse
+          and "model_usage" in ereignisse, f"Exit {p.returncode} {ereignisse}")
+    check("M --from-run schreibt NIE `accepted` — PASS ist keine Abnahme",
+          "accepted" not in ereignisse, str(ereignisse))
+    check("M --from-run schreibt keine erfundene Menschenzeit",
+          "human_minutes" not in ereignisse, str(ereignisse))
+    check("M --from-run sagt, was der Mensch nachtragen muss",
+          any("human_minutes" in (z.get("_comment") or "") for z in zeilen),
+          json.dumps(zeilen[-1])[:160])
+
+
 def main() -> int:
     print("DevOS Eigentest\n")
 
@@ -947,6 +1018,9 @@ def main() -> int:
 
     print("\nO — Orchestrator: Runden, Budget, Zustand, Fortsetzung:")
     orchestrator_proben()
+
+    print("\nM — Messung: was eine Maschine nicht messen kann, erfindet sie nicht:")
+    messproben()
 
     print(f"\nbestanden: {len(PASSED)} von {len(PASSED) + len(FAILED)}")
     if FAILED:

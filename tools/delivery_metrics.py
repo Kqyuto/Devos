@@ -25,7 +25,14 @@ Eingabe: devos/deliveries.jsonl — append-only, eine Zeile je Ereignis.
   {"delivery":"TASK-001","event":"artifact","name":"K2-Annahmenblock","minutes":20}
   {"delivery":"TASK-001","event":"suspended_artifact","name":"K1-Rechnung"}
   {"delivery":"TASK-001","event":"review_round","blocking":2,"false_alarms":1}
+  {"delivery":"TASK-001","event":"model_usage","prompt_tokens":48000,"completion_tokens":3100,"cost_usd":0.09}
   {"delivery":"TASK-001","event":"accepted","at":"...","commit":"<voller SHA>"}
+  {"delivery":"TASK-001","event":"escaped_defect","what":"...","found_at":"2026-10-02","where":"..."}
+
+`--from-run work/runs` erzeugt die maschinell messbaren Ereignisse aus den
+Laufzustaenden des Orchestrators. Was eine Maschine NICHT messen kann — die Zeit
+des Menschen und die spaeter entdeckten Fehler — erzeugt es ausdruecklich nicht
+und sagt das, statt Nullen zu schreiben, die wie Messwerte aussehen.
 
 Gegen-Metrik gegen das Optimieren der Zielgroesse: `minutes_per_changed_line`.
 Wer die Durchlaufzeit senkt, indem er Lieferungen leert, verschlechtert sie.
@@ -90,6 +97,8 @@ def aggregate(events: list[dict], root: str) -> list[dict]:
             "reviewer_minutes": 0, "artifact_minutes": 0, "review_rounds": 0, "blockers": 0,
             "false_alarms": 0, "opened": None, "accepted": None, "base": None, "head": None,
             "mandatory_artifacts": [], "suspended_artifacts": [], "git_error": None,
+            "human_booked": False, "escaped_defects": [], "prompt_tokens": 0,
+            "completion_tokens": 0, "cost_usd": None,
         })
         ev = e["event"]
         if ev == "task_opened":
@@ -98,6 +107,19 @@ def aggregate(events: list[dict], root: str) -> list[dict]:
             d["accepted"], d["head"] = e["at"], e.get("commit")
         elif ev in ("human_minutes", "builder_minutes", "reviewer_minutes"):
             d[ev] += int(e["minutes"])
+            if ev == "human_minutes":
+                d["human_booked"] = True
+        elif ev == "escaped_defect":
+            # Nachtraeglich entdeckte Fehler. Sie sind die einzige Groesse, die
+            # sagt, ob das Verfahren ueberhaupt etwas taugt: ein Gate, das
+            # schnell ist und Fehler durchlaesst, ist teurer als keins.
+            d["escaped_defects"].append({"what": e.get("what"), "found_at": e.get("found_at"),
+                                         "where": e.get("where")})
+        elif ev == "model_usage":
+            d["prompt_tokens"] += int(e.get("prompt_tokens") or 0)
+            d["completion_tokens"] += int(e.get("completion_tokens") or 0)
+            if e.get("cost_usd") is not None:
+                d["cost_usd"] = round((d["cost_usd"] or 0) + float(e["cost_usd"]), 6)
         elif ev == "artifact":
             d["mandatory_artifacts"].append(e["name"])
             d["artifact_minutes"] += int(e.get("minutes", 0))
@@ -120,7 +142,12 @@ def aggregate(events: list[dict], root: str) -> list[dict]:
             d["changed_lines"] = d["changed_files"] = None
         total = d["human_minutes"] + d["builder_minutes"] + d["reviewer_minutes"]
         d["total_minutes"] = total
-        d["human_share"] = round(d["human_minutes"] / total, 3) if total else None
+        # Nicht gebuchte Menschenzeit ist NICHT null Prozent. Ohne diese
+        # Unterscheidung liest sich eine ungemessene Lieferung als das beste
+        # Ergebnis der Reihe — und genau diese Zahl soll das Verfahren tragen.
+        d["human_share"] = (round(d["human_minutes"] / total, 3)
+                            if total and d["human_booked"] else None)
+        d["escaped_defect_count"] = len(d["escaped_defects"])
         d["minutes_per_changed_line"] = round(total / d["changed_lines"], 3) if d["changed_lines"] else None
         d["blocker_precision"] = (round((d["blockers"] - d["false_alarms"]) / d["blockers"], 3)
                                   if d["blockers"] else None)
@@ -129,8 +156,58 @@ def aggregate(events: list[dict], root: str) -> list[dict]:
         # ist gelungen. Eine Lieferung, deren Ref kaputt ist, ist nicht gemessen -
         # sie darf keine Stichprobe fuellen. (Befund F05)
         d["complete"] = bool(d["opened"] and d["accepted"] and d["base"] and d["head"]
-                             and not d["git_error"] and d["changed_lines"] is not None)
+                             and not d["git_error"] and d["changed_lines"] is not None
+                             and d["human_booked"])
     return sorted(by.values(), key=lambda d: d["opened"] or "")
+
+
+def aus_laeufen(runs_dir: Path) -> list[str]:
+    """Erzeugt die MASCHINELL MESSBAREN Ereignisse aus den Laufzustaenden.
+
+    Und nur die. Was eine Maschine nicht messen kann, erzeugt sie hier auch
+    nicht: die Zeit des Menschen, die Abnahme und die spaeter entdeckten Fehler.
+    Eine erzeugte Null an diesen Stellen waere kein gespartes Buchen, sondern ein
+    Messwert, den niemand gemessen hat — und ausgerechnet der Menschenanteil ist
+    die Groesse, wegen der ueberhaupt gemessen wird.
+
+    `PASS` ist ausdruecklich KEINE Abnahme. Es heisst, dass der Mensch jetzt
+    entscheiden darf. Diese Funktion schreibt deshalb nie `accepted`.
+    """
+    zeilen: list[str] = []
+    for sf in sorted(runs_dir.glob("*/run_state.json")):
+        try:
+            st = json.loads(sf.read_text(encoding="utf-8"))
+        except Exception as ex:
+            zeilen.append(json.dumps({"_comment": f"{sf}: nicht lesbar — {ex}"}, ensure_ascii=False))
+            continue
+        lief = st.get("task", {}).get("id") or sf.parent.name
+        sp = st.get("spent", {})
+        zeilen.append(json.dumps({"delivery": lief, "event": "task_opened",
+                                  "at": st.get("created_at"), "base": st.get("base")},
+                                 ensure_ascii=False))
+        for r in st.get("rounds", []):
+            g = sf.parent / f"round-{r['n']}" / "gate.json"
+            if not g.exists():
+                continue
+            try:
+                gd = json.loads(g.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            zeilen.append(json.dumps({"delivery": lief, "event": "review_round",
+                                      "blocking": gd.get("blocking", 0),
+                                      "gate": gd.get("gate")}, ensure_ascii=False))
+        if sp.get("prompt_tokens") or sp.get("cost_usd") is not None:
+            zeilen.append(json.dumps({"delivery": lief, "event": "model_usage",
+                                      "prompt_tokens": sp.get("prompt_tokens") or 0,
+                                      "completion_tokens": sp.get("completion_tokens") or 0,
+                                      "cost_usd": sp.get("cost_usd")}, ensure_ascii=False))
+        zeilen.append(json.dumps({"_comment":
+                                  f"{lief}: von Hand nachzutragen — human_minutes (die Zeit, die DU "
+                                  f"gebraucht hast), scope (reduced|full), accepted (erst beim Merge, "
+                                  f"mit commit), false_alarms je review_round, escaped_defect fuer "
+                                  f"jeden spaeter gefundenen Fehler. Stand: "
+                                  f"{st.get('state')} / {st.get('outcome')}"}, ensure_ascii=False))
+    return zeilen
 
 
 def main() -> int:
@@ -138,7 +215,22 @@ def main() -> int:
     ap.add_argument("--log", default="devos/deliveries.jsonl")
     ap.add_argument("--root", default=".")
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--from-run", default=None,
+                    help="Verzeichnis mit <task>/run_state.json — erzeugt die maschinell "
+                         "messbaren Ereignisse auf die Standardausgabe")
     a = ap.parse_args()
+
+    if a.from_run:
+        d = Path(a.from_run)
+        if not d.exists():
+            print(f"kein Laufverzeichnis unter {d}", file=sys.stderr)
+            return 1
+        zeilen = aus_laeufen(d)
+        if not zeilen:
+            print(f"keine run_state.json unter {d} — nichts zu erzeugen.", file=sys.stderr)
+            return 1
+        print("\n".join(zeilen))
+        return 0
 
     p = Path(a.log)
     if not p.exists():
@@ -170,16 +262,18 @@ def main() -> int:
 
     print(f"Lieferungen gesamt: {len(rows)} · davon abgeschlossen und vollstaendig gemessen: {len(done)}\n")
     hdr = ("Lieferung", "Umfang", "fertig", "Std.ges", "Mensch%", "Runden", "Blocker",
-           "Fehlalarm", "Pflichtart.", "ausgesetzt", "Dateien", "Zeilen", "min/Zeile")
+           "Fehlalarm", "spaeter", "Token", "USD", "Dateien", "Zeilen", "min/Zeile")
     print("| " + " | ".join(hdr) + " |")
     print("|" + "---|" * len(hdr))
     for d in rows:
-        print("| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |".format(
+        print("| {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} | {} |".format(
             d["delivery"], d["scope"] or "—", "ja" if d["complete"] else "nein",
             round(d["total_minutes"] / 60, 2) if d["total_minutes"] else "—",
-            f"{d['human_share']*100:.0f}" if d["human_share"] is not None else "—",
+            f"{d['human_share']*100:.0f}" if d["human_share"] is not None else "nicht gebucht",
             d["review_rounds"], d["blockers"], d["false_alarms"],
-            d["mandatory_artifact_count"], len(d["suspended_artifacts"]),
+            d["escaped_defect_count"],
+            (d["prompt_tokens"] + d["completion_tokens"]) or "—",
+            d["cost_usd"] if d["cost_usd"] is not None else "—",
             d["changed_files"] if d["changed_files"] is not None else "—",
             d["changed_lines"] if d["changed_lines"] is not None else "—",
             d["minutes_per_changed_line"] if d["minutes_per_changed_line"] is not None else "—"))
@@ -187,6 +281,16 @@ def main() -> int:
     for d in rows:
         if d["git_error"]:
             print(f"\nBEFUND {d['delivery']}: {d['git_error']}")
+        if not d["human_booked"] and (d["builder_minutes"] or d["reviewer_minutes"]):
+            print(f"\nBEFUND {d['delivery']}: Modellzeit gebucht, Menschenzeit nicht. "
+                  "Der Menschenanteil ist damit unbekannt, nicht null — und genau er ist "
+                  "die Groesse, wegen der gemessen wird.")
+    nachtraeglich = [(d["delivery"], x) for d in rows for x in d["escaped_defects"]]
+    if nachtraeglich:
+        print("\nNachtraeglich entdeckte Fehler — was durch das Gate gegangen ist:")
+        for lief, x in nachtraeglich:
+            print(f"  {lief}: {x.get('what')} (gefunden {x.get('found_at') or '—'}, "
+                  f"{x.get('where') or '—'})")
 
     print()
     print("Zur Assay-Behauptung '12-20 Pflichtartefakte je Lieferung':")
@@ -210,6 +314,12 @@ def main() -> int:
 
     tot = sum(d["total_minutes"] for d in done)
     hum = sum(d["human_minutes"] for d in done)
+    entwischt = sum(d["escaped_defect_count"] for d in done)
+    tok = sum(d["prompt_tokens"] + d["completion_tokens"] for d in done)
+    print(f"  nachtraeglich gefundene Fehler: {entwischt} auf {len(done)} Lieferungen"
+          + ("  — die Zahl, die entscheidet, ob das Gate etwas taugt" if entwischt else ""))
+    if tok:
+        print(f"  Modellnutzung           : {tok} Token")
     print(f"Ueber {len(done)} abgeschlossene Lieferungen:")
     print(f"  Menschenanteil          : {hum/tot*100:.0f} %" if tot else "  Menschenanteil: —")
     print(f"  Gesamtzeit              : {tot/60:.1f} h  =>  bei 14 h/Woche {tot/60/14:.1f} Wochen, "
