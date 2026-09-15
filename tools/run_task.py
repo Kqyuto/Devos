@@ -47,6 +47,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 from project_config import Config      # noqa: E402
+import devos_env                     # noqa: E402
 
 GATE_NAMEN = {0: "MERGEABLE_PENDING_HUMAN", 1: "CHANGES_REQUIRED",
               2: "HUMAN_DECISION_REQUIRED", 3: "INVALID_RESULT"}
@@ -251,8 +252,13 @@ def main() -> int:
     ap.add_argument("--max-rounds", type=int, default=None, help="Korrekturrunden (Vorgabe 2)")
     ap.add_argument("--max-wall-minutes", type=int, default=None)
     ap.add_argument("--max-cost-usd", type=float, default=None)
+    ap.add_argument("--graph", choices=["auto", "on", "off"], default="auto",
+                    help="Kontexthinweise. 'auto'/'on' baut den Index vor jedem Paket neu — "
+                         "ein Index, den man von Hand nachziehen muss, ist nach dem ersten "
+                         "Builder-Commit veraltet. 'off' fuer den Vergleichslauf")
     a = ap.parse_args()
 
+    devos_env.laden()
     root = str(Path(a.root).resolve())
     cfg = Config(root)
     taskdatei = Path(a.task)
@@ -317,6 +323,7 @@ def main() -> int:
                       "wall_minutes": 0.0, "cost_usd": None,
                       "prompt_tokens": 0, "completion_tokens": 0},
             "state": "BUILD", "rounds": [], "outcome": None, "stop_reason": None,
+            "graph_mode": a.graph,
         }
         lauf.speichern()
 
@@ -404,9 +411,22 @@ def main() -> int:
                        f"round-{runde_n}").as_posix())
         out_abs = Path(root) / out_rel
         if not lauf.schritt_gilt(r, "package", head):
+            # Den Index VOR dem Paket neu bauen. Sonst gehoert er zum Stand vor
+            # dem Builder-Commit, gilt als veraltet und wird — richtigerweise —
+            # nicht benutzt. Ein Index, den ein Mensch nachziehen muss, ist nach
+            # der ersten Korrekturrunde immer veraltet.
+            if a.graph in ("auto", "on"):
+                gi = subprocess.run([sys.executable, str(HERE / "context_index.py"), "build",
+                                     "--root", root, "--rev", head],
+                                    capture_output=True, text=True)
+                if gi.returncode == 0:
+                    print("    Kontextindex: " + gi.stdout.strip().splitlines()[-1][:110])
+                elif a.graph == "on":
+                    print(f"    Kontextindex nicht baubar: {gi.stderr.strip()[:160]}",
+                          file=sys.stderr)
             cmd = [sys.executable, str(HERE / "review_request.py"),
                    "--task", str(taskdatei), "--root", root, "--out", out_rel,
-                   "--base", lauf.d["base"], "--head", head]
+                   "--base", lauf.d["base"], "--head", head, "--graph", a.graph]
             if lauf.d["tests_cmd"]:
                 cmd += ["--tests", lauf.d["tests_cmd"]]
             print("    Paket erzeugen und Maschinentests fahren …")
@@ -420,6 +440,8 @@ def main() -> int:
                         artifacts=[str(out_abs / "review_context.json"),
                                    str(out_abs / "REVIEW-REQUEST.md")])
         ctx = json.loads((out_abs / "review_context.json").read_text(encoding="utf-8"))
+        r["graph_used"] = bool((ctx.get("graph") or {}).get("used"))
+        lauf.speichern()
 
         # Fehlgeschlagene Maschinentests sind kein Reviewgegenstand. Der Reviewer
         # wird nicht gerufen — das spart einen Aufruf und trifft die Sache: ein

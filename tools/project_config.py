@@ -66,6 +66,13 @@ class Config:
         self.limits = {**STANDARD_LIMITS, **(roh.get("limits") or {})}
         self.builder: dict = roh.get("builder") or {}
         self.model_families: dict = roh.get("model_families") or {}
+        # IDs, die dem ID-Muster entsprechen, aber in einem ANDEREN Projekt
+        # definiert sind — Wert ist die Herkunft. Ohne diese Liste meldet der
+        # Registerpruefer sie als toten Anker, und das waere ein Fehlalarm.
+        self.external_ids: dict = roh.get("external_ids") or {}
+        # Austauschbare Kontextsuche. Leer = eingebauter Index bzw. gar keiner.
+        # Nichts im Verfahren haengt davon ab.
+        self.graph: dict = roh.get("graph") or {}
 
     def hinweis(self) -> dict | None:
         """Der Eintrag fuer `omitted`, wenn die Bindung fehlt oder kaputt ist."""

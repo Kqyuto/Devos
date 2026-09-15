@@ -580,6 +580,192 @@ def orchestrator_proben() -> None:
           p.returncode == 2 and st.get("outcome") != "PASS", f"Exit {p.returncode}")
 
 
+PREFLIGHT = HERE / "preflight.py"
+INDEX = HERE / "context_index.py"
+
+
+def preflight_proben() -> None:
+    """Der Bereitschaftstest muss den fehlenden Posten NENNEN, nicht nur zaehlen."""
+    td, base = index_repo()
+    p = subprocess.run([sys.executable, str(PREFLIGHT), "--root", td, "--json"],
+                       capture_output=True, text=True)
+    js = json.loads(p.stdout)
+    punkte = {z["punkt"]: z for z in js["checks"]}
+    check("P ohne Schluessel ist der Lauf NICHT bereit (Exit 1)",
+          p.returncode == 1 and js["ready"] is False, f"Exit {p.returncode}")
+    check("P der fehlende Schluessel wird als blockierend benannt",
+          punkte.get("Reviewer-Schluessel", {}).get("blockierend") is True
+          and "env" in punkte["Reviewer-Schluessel"]["fix"],
+          json.dumps(punkte.get("Reviewer-Schluessel"))[:160])
+    check("P ein fehlendes Testkommando wird als blockierend benannt — sonst endet "
+          "jede Lieferung bei CHANGES_REQUIRED",
+          punkte.get("Testkommando", {}).get("blockierend") is True,
+          json.dumps(punkte.get("Testkommando"))[:140])
+    check("P die Familientrennung wird geprueft, bevor irgendetwas laeuft",
+          "Familientrennung" in punkte)
+    check("P ein fehlender Kontextindex blockiert NICHT",
+          punkte.get("Kontextindex", {}).get("blockierend") is False,
+          json.dumps(punkte.get("Kontextindex"))[:140])
+    check("P ein fehlendes Builder-Kommando blockiert NICHT — Handbetrieb ist gueltig",
+          punkte.get("Builder-Kommando", {}).get("blockierend") is False,
+          json.dumps(punkte.get("Builder-Kommando"))[:140])
+
+    env = {**os.environ, "DEVOS_REVIEWER_API_KEY": SCHLUESSEL,
+           "DEVOS_REVIEWER_MODEL": "gpt-5", "DEVOS_BUILDER_MODEL": "claude-opus-5"}
+    p = subprocess.run([sys.executable, str(PREFLIGHT), "--root", td, "--json",
+                        "--tests", "python3 -c \"print(1)\""],
+                       capture_output=True, text=True, env=env)
+    js = json.loads(p.stdout)
+    punkte = {z["punkt"]: z for z in js["checks"]}
+    check("P mit Schluessel, beiden Modellen und gruenem Test ist der Lauf bereit",
+          p.returncode == 0 and js["ready"] is True,
+          json.dumps([z["punkt"] for z in js["checks"] if z["blockierend"]]))
+    check("P der Schluessel wird NIE ausgegeben, nur seine Laenge",
+          SCHLUESSEL not in p.stdout and SCHLUESSEL not in p.stderr)
+    check("P nachgewiesene Familientrennung wird als solche ausgewiesen",
+          punkte["Familientrennung"]["zustand"] == "ok",
+          json.dumps(punkte["Familientrennung"])[:140])
+
+    env2 = {**env, "DEVOS_REVIEWER_MODEL": "claude-sonnet-5"}
+    p = subprocess.run([sys.executable, str(PREFLIGHT), "--root", td, "--json",
+                        "--tests", "python3 -c \"print(1)\""],
+                       capture_output=True, text=True, env=env2)
+    js = json.loads(p.stdout)
+    check("P gleiche Modellfamilie auf beiden Seiten blockiert die Bereitschaft",
+          p.returncode == 1 and any(z["punkt"] == "Familientrennung" and z["blockierend"]
+                                    for z in js["checks"]),
+          f"Exit {p.returncode}")
+
+
+def index_repo() -> tuple[str, str]:
+    """Ein Repo mit Register, Behauptung und zwei Commits."""
+    td = tempfile.mkdtemp(prefix="devos-idx-")
+    git(td, "init", "-q", ".")
+    git(td, "config", "user.email", "t@t"); git(td, "config", "user.name", "t")
+    (Path(td) / ".devos.json").write_text(json.dumps({
+        "project": "p", "id_pattern": r"\b(XY-\d{3})\b",
+        "registers": {"XY": {"path": "reg.md", "kind": "heading",
+                             "heading_pattern": r"^#{1,4}\s+XY-\d{3}\b"}}}), encoding="utf-8")
+    (Path(td) / "reg.md").write_text("## XY-007 — Erste Norm\n\nWortlaut.\n\n"
+                                     "## XY-008 — Zweite Norm\n\nAnderer Wortlaut.\n",
+                                     encoding="utf-8")
+    (Path(td) / "a.py").write_text("x = 1\n", encoding="utf-8")
+    (Path(td) / "notizen.md").write_text("Dieser Code satisfies XY-007 und XY-008.\n",
+                                         encoding="utf-8")
+    git(td, "add", "."); git(td, "commit", "-qm", "erst")
+    (Path(td) / "a.py").write_text("x = 2  # betrifft XY-007\n", encoding="utf-8")
+    git(td, "add", "."); git(td, "commit", "-qm", "zweit")
+    return td, git(td, "rev-parse", "HEAD").stdout.strip()
+
+
+def paket(td: str, extra: list[str] | None = None, out: str = "rev") -> dict | None:
+    tk = Path(td) / "T.md"
+    tk.write_text("# T-IDX — Probe\n\n## Acceptance\n- XY-007 gilt weiterhin\n", encoding="utf-8")
+    p = subprocess.run([sys.executable, str(REQUEST), "--task", str(tk), "--root", td,
+                        "--base", "HEAD~1", "--head", "HEAD", "--out", out] + (extra or []),
+                       capture_output=True, text=True,
+                       env={**os.environ, "DEVOS_BUILDER_MODEL": "claude-opus-5"})
+    f = Path(td) / out / "review_context.json"
+    return json.loads(f.read_text(encoding="utf-8")) if f.exists() else None
+
+
+def indexproben() -> None:
+    td, head = index_repo()
+    subprocess.run([sys.executable, str(INDEX), "build", "--root", td, "--rev", "HEAD"],
+                   capture_output=True, text=True)
+
+    c = paket(td)
+    g = (c or {}).get("graph") or {}
+    check("X1 jeder Treffer nennt Revision UND Fundstelle",
+          g.get("used") is True and g["hits"]
+          and all(h.get("rev") == head and h.get("path") and h.get("line") for h in g["hits"]),
+          json.dumps(g.get("hits", [])[:1])[:160])
+    check("X1 eine im Text BEHAUPTETE Beziehung wird als Behauptung gefuehrt",
+          any(h.get("kind") == "claim" for h in g["hits"]),
+          str([h.get("kind") for h in g["hits"]][:6]))
+    md = (Path(td) / "rev" / "REVIEW-REQUEST.md").read_text(encoding="utf-8")
+    check("X1 das Paket sagt dem Reviewer, dass der Index den Pruefumfang NICHT begrenzt",
+          "begrenzt den Pruefumfang nicht" in md)
+
+    # Der Index darf nichts wegnehmen: derselbe Diff mit und ohne.
+    c_ohne = paket(td, ["--graph", "off"], out="rev_off")
+    check("X7 der Index kuerzt weder Diff noch Bestandsliste",
+          c_ohne["diff_included"] == c["diff_included"]
+          and c_ohne["inventory"]["count"] == c["inventory"]["count"],
+          f"{c_ohne['diff_included']} vs {c['diff_included']}")
+    check("X6 --graph off erzeugt einen sauberen Vergleichslauf ohne Hinweise",
+          c_ohne["graph"]["used"] is False and not c_ohne["graph"]["hits"]
+          and "abgeschaltet" in c_ohne["graph"]["why"], json.dumps(c_ohne["graph"])[:140])
+
+    # Veralteter Index: wird NICHT benutzt und steht in omitted.
+    (Path(td) / "neu.md").write_text("XY-008 kommt neu dazu\n", encoding="utf-8")
+    git(td, "add", "."); git(td, "commit", "-qm", "dritt")
+    p = subprocess.run([sys.executable, str(INDEX), "status", "--root", td, "--rev", "HEAD"],
+                       capture_output=True, text=True)
+    check("X2 status erkennt den veralteten Index und endet mit Exit 1",
+          p.returncode == 1 and "VERALTET" in p.stdout, p.stdout.strip()[:140])
+    c2 = paket(td, out="rev2")
+    check("X2 ein veralteter Index wird NICHT benutzt",
+          c2["graph"]["used"] is False and c2["graph"]["stale"] is True,
+          json.dumps(c2["graph"])[:160])
+    check("X2 und das steht in `omitted`, nicht nur im Log",
+          any("Kontextindex" in o["path"] for o in c2["omitted"]),
+          json.dumps(c2["omitted"])[:200])
+
+    # Fehlender Index blockiert nichts.
+    (Path(td) / "work" / "index" / "context-index.json").unlink()
+    c3 = paket(td, out="rev3")
+    check("X5 ohne Index entsteht das Paket unveraendert — der Index ist keine Voraussetzung",
+          c3 is not None and c3["graph"]["used"] is False
+          and c3["diff_included"] == c2["diff_included"], json.dumps((c3 or {}).get("graph"))[:140])
+
+    # Externer Anbieter: Vertrag wird hart geprueft.
+    def anbieter(payload: str) -> str:
+        sk = Path(td) / "anbieter.py"
+        sk.write_text("import sys\nsys.stdin.read()\nsys.stdout.write(%r)\n" % payload,
+                      encoding="utf-8")
+        return f"{sys.executable} {sk}"
+
+    h2 = git(td, "rev-parse", "HEAD").stdout.strip()
+    ohne_ort = json.dumps({"source": "fremd", "built_for_rev": h2, "stale": False,
+                           "hits": [{"id": "XY-007", "why": "steht irgendwo"}]})
+    c4 = paket(td, out="rev4") if False else None
+    os.environ["DEVOS_GRAPH_CMD"] = anbieter(ohne_ort)
+    try:
+        c4 = paket(td, out="rev4")
+        g4 = c4["graph"]
+        check("X3 Anbieter-Treffer ohne Fundstelle/Revision werden VERWORFEN, nicht benutzt",
+              g4["used"] is True and not g4["hits"] and len(g4["rejected"]) == 1,
+              json.dumps(g4)[:200])
+        check("X3 die Verwerfung steht in `omitted` — der Mensch sieht sie",
+              any("Kontexthinweise" in o["path"] for o in c4["omitted"]),
+              json.dumps(c4["omitted"])[:200])
+
+        falsche_rev = json.dumps({"source": "fremd", "built_for_rev": h2, "stale": False,
+                                  "hits": [{"id": "XY-007", "path": "reg.md", "line": 1,
+                                            "rev": "0" * 40}]})
+        os.environ["DEVOS_GRAPH_CMD"] = anbieter(falsche_rev)
+        c5 = paket(td, out="rev5")
+        check("X4 ein Treffer aus einer ANDEREN Revision wird verworfen",
+              not c5["graph"]["hits"] and c5["graph"]["rejected"], json.dumps(c5["graph"])[:200])
+
+        os.environ["DEVOS_GRAPH_CMD"] = f"{sys.executable} -c 'import sys; sys.exit(3)'"
+        c6 = paket(td, out="rev6")
+        check("X9 ein kaputter Anbieter blockiert das Paket nicht",
+              c6 is not None and c6["graph"]["used"] is False
+              and c6["diff_included"] == c2["diff_included"],
+              json.dumps((c6 or {}).get("graph"))[:160])
+
+        os.environ["DEVOS_GRAPH_CMD"] = anbieter(json.dumps(
+            {"source": "fremd", "built_for_rev": h2, "stale": True, "hits": []}))
+        c7 = paket(td, out="rev7")
+        check("X2 ein Anbieter, der sich selbst als veraltet meldet, wird nicht benutzt",
+              c7["graph"]["used"] is False and c7["graph"]["stale"] is True,
+              json.dumps(c7["graph"])[:160])
+    finally:
+        os.environ.pop("DEVOS_GRAPH_CMD", None)
+
+
 def messproben() -> None:
     """Die Messung muss den Unterschied zwischen 'null' und 'nicht gemessen' halten."""
     with tempfile.TemporaryDirectory() as td:
@@ -652,6 +838,14 @@ def messproben() -> None:
 
 
 def main() -> int:
+    # Hermetisch: eine vorhandene ~/.config/devos/env wuerde sonst Schluessel und
+    # Modellnamen in jede Probe tragen. Ein Eigentest, der je nach Rechner andere
+    # Umgebung sieht, prueft nicht das Werkzeug, sondern den Rechner.
+    os.environ["DEVOS_ENV_FILE"] = str(Path(tempfile.gettempdir()) / "devos-gibt-es-nicht.env")
+    for v in ("DEVOS_REVIEWER_API_KEY", "DEVOS_REVIEWER_MODEL", "DEVOS_REVIEWER_BASE_URL",
+              "DEVOS_BUILDER_MODEL", "DEVOS_BUILDER_CMD", "DEVOS_GRAPH_CMD",
+              "DEVOS_REVIEWER_PRICE_IN", "DEVOS_REVIEWER_PRICE_OUT"):
+        os.environ.pop(v, None)
     print("DevOS Eigentest\n")
 
     print("Gate — Grundregeln:")
@@ -1018,6 +1212,12 @@ def main() -> int:
 
     print("\nO — Orchestrator: Runden, Budget, Zustand, Fortsetzung:")
     orchestrator_proben()
+
+    print("\nP — Bereitschaft: der Bericht sagt, was fehlt, nicht nur dass etwas fehlt:")
+    preflight_proben()
+
+    print("\nX — Kontextindex: findet, entscheidet nicht, begrenzt nichts:")
+    indexproben()
 
     print("\nM — Messung: was eine Maschine nicht messen kann, erfindet sie nicht:")
     messproben()

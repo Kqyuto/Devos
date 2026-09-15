@@ -63,6 +63,7 @@ from urllib.parse import urlsplit
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import jsonschema_mini as J          # noqa: E402
 import model_family as MF            # noqa: E402
+import devos_env                     # noqa: E402
 
 SCHEMA_PATH = Path(__file__).resolve().parent.parent / "schema" / "review_result.schema.json"
 
@@ -244,6 +245,7 @@ def main() -> int:
     ap.add_argument("--dry-run", action="store_true", help="Anfrage schreiben, nicht senden")
     a = ap.parse_args()
 
+    devos_env.laden()
     schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
     req_path = Path(a.request)
     if not req_path.exists():

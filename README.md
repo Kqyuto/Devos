@@ -1,5 +1,8 @@
 # DevOS — Zwei-Modell-Review als Werkzeug
 
+> **Du willst nur loslegen?** [`START.md`](START.md) — Schlüssel eintragen,
+> `devos preflight --smoke`, mahoraga anschließen. Drei Schritte.
+
 Ein Builder-Modell schreibt, ein Reviewer-Modell **einer anderen Familie** prüft, eine
 deterministische Maschine rechnet das Gate, **der Mensch entscheidet**. Dazwischen trägt
 niemand Dateien.
@@ -50,14 +53,22 @@ abhängt, wird in der Praxis optional, und ein optionales Gate ist keins.
 
 ```bash
 git clone <dieses-repo> ~/devos
-python3 ~/devos/tools/selftest.py        # 121 Proben, Exit 1 bei Fehlschlag
+export PATH="$HOME/devos/bin:$PATH"
 
-export DEVOS_REVIEWER_API_KEY=...        # Pflicht — gehört in die Umgebung, nie ins Repo
-export DEVOS_REVIEWER_MODEL=gpt-5        # Pflicht
-export DEVOS_BUILDER_MODEL=claude-opus-5 # Pflicht für den Nachweis der Familientrennung
-export DEVOS_REVIEWER_BASE_URL=https://api.openai.com/v1   # Standard; jede
-                                         # OpenAI-kompatible Schnittstelle geht
+devos selftest                           # 155 Proben, Exit 1 bei Fehlschlag
+
+mkdir -p ~/.config/devos
+cp ~/devos/templates/env.example ~/.config/devos/env
+chmod 600 ~/.config/devos/env
+$EDITOR ~/.config/devos/env              # eine Zeile: DEVOS_REVIEWER_API_KEY
+
+devos preflight --smoke                  # sagt, was noch fehlt — und probt den echten Lauf
 ```
+
+Die Zugangsdatei liegt **außerhalb beider Repositories**. Ein Schlüssel im
+Arbeitsverzeichnis wird irgendwann mitcommittet — nicht aus Nachlässigkeit, sondern weil
+`git add -A` genau dafür gebaut ist. Die Umgebung gewinnt immer gegen die Datei, damit ein
+einzelner Lauf gezielt anders konfiguriert werden kann.
 
 Optional, aber nützlich:
 

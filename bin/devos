@@ -1,0 +1,58 @@
+#!/usr/bin/env python3
+"""DevOS — ein Einstieg statt neun Skriptpfade.
+
+    devos preflight [--smoke]     Ist alles da? Was fehlt? Ein echter Probelauf.
+    devos run    --task ...       Den ganzen Lauf bis zum Human Gate fahren.
+    devos review --task ...       Nur ein Review, ohne Laufzustand.
+    devos gate   <result>         Nur das Gate rechnen.
+    devos index  build|query|status
+    devos check                   Registerintegritaet (taugt als Testkommando).
+    devos handover --state ...    Entscheidungsblatt erzeugen.
+    devos metrics [--from-run …]  Prozessmetriken.
+    devos selftest                Eigentest des Werkzeugs.
+    devos findings                Die Reviewer-Befunde vorfuehren.
+
+Alles hinter dem Unterkommando geht unveraendert an das jeweilige Werkzeug.
+Die Zugangsdaten werden vorher aus ~/.config/devos/env geladen — einmal, hier,
+damit kein Werkzeug sie einzeln suchen muss.
+"""
+from __future__ import annotations
+
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+DEVOS = Path(__file__).resolve().parent.parent
+TOOLS = DEVOS / "tools"
+sys.path.insert(0, str(TOOLS))
+import devos_env                        # noqa: E402
+
+BEFEHLE = {
+    "preflight": "preflight.py", "run": "run_task.py", "review": "run_review.py",
+    "gate": "review_result.py", "index": "context_index.py", "check": "check_registers.py",
+    "handover": "handover.py", "metrics": "delivery_metrics.py", "selftest": "selftest.py",
+    "findings": "reproduce_findings.py", "request": "review_request.py",
+    "dispatch": "review_dispatch.py",
+}
+
+
+def main() -> int:
+    if len(sys.argv) < 2 or sys.argv[1] in ("-h", "--help", "help"):
+        print(__doc__.strip())
+        print(f"\nDEVOS_HOME = {DEVOS}")
+        return 0
+    befehl = sys.argv[1]
+    if befehl not in BEFEHLE:
+        print(f"Unbekanntes Unterkommando {befehl!r}.\n", file=sys.stderr)
+        print(__doc__.strip(), file=sys.stderr)
+        return 2
+    bericht = devos_env.laden()
+    for w in bericht["warnings"]:
+        print(f"Hinweis: {w}", file=sys.stderr)
+    os.environ.setdefault("DEVOS_HOME", str(DEVOS))
+    return subprocess.run([sys.executable, str(TOOLS / BEFEHLE[befehl]), *sys.argv[2:]]).returncode
+
+
+if __name__ == "__main__":
+    sys.exit(main())

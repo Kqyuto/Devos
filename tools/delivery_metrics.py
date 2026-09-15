@@ -98,7 +98,7 @@ def aggregate(events: list[dict], root: str) -> list[dict]:
             "false_alarms": 0, "opened": None, "accepted": None, "base": None, "head": None,
             "mandatory_artifacts": [], "suspended_artifacts": [], "git_error": None,
             "human_booked": False, "escaped_defects": [], "prompt_tokens": 0,
-            "completion_tokens": 0, "cost_usd": None,
+            "completion_tokens": 0, "cost_usd": None, "graph_used": None,
         })
         ev = e["event"]
         if ev == "task_opened":
@@ -115,6 +115,9 @@ def aggregate(events: list[dict], root: str) -> list[dict]:
             # schnell ist und Fehler durchlaesst, ist teurer als keins.
             d["escaped_defects"].append({"what": e.get("what"), "found_at": e.get("found_at"),
                                          "where": e.get("where")})
+        elif ev == "graph":
+            # Fuer den Vergleich vergleichbarer Tasks MIT und OHNE Kontextabruf.
+            d["graph_used"] = bool(e.get("used"))
         elif ev == "model_usage":
             d["prompt_tokens"] += int(e.get("prompt_tokens") or 0)
             d["completion_tokens"] += int(e.get("completion_tokens") or 0)
@@ -196,6 +199,11 @@ def aus_laeufen(runs_dir: Path) -> list[str]:
             zeilen.append(json.dumps({"delivery": lief, "event": "review_round",
                                       "blocking": gd.get("blocking", 0),
                                       "gate": gd.get("gate")}, ensure_ascii=False))
+        benutzt = [r.get("graph_used") for r in st.get("rounds", []) if "graph_used" in r]
+        if benutzt:
+            zeilen.append(json.dumps({"delivery": lief, "event": "graph",
+                                      "used": any(benutzt), "mode": st.get("graph_mode")},
+                                     ensure_ascii=False))
         if sp.get("prompt_tokens") or sp.get("cost_usd") is not None:
             zeilen.append(json.dumps({"delivery": lief, "event": "model_usage",
                                       "prompt_tokens": sp.get("prompt_tokens") or 0,
@@ -320,6 +328,22 @@ def main() -> int:
           + ("  — die Zahl, die entscheidet, ob das Gate etwas taugt" if entwischt else ""))
     if tok:
         print(f"  Modellnutzung           : {tok} Token")
+    mit = [d for d in done if d["graph_used"] is True]
+    ohne = [d for d in done if d["graph_used"] is False]
+    if mit and ohne:
+        def mw(xs, k):
+            v = [x[k] for x in xs if x.get(k) is not None]
+            return sum(v) / len(v) if v else None
+        print(f"  mit Kontextabruf ({len(mit)}) : "
+              f"{mw(mit, 'total_minutes')} min, {mw(mit, 'review_rounds')} Runden, "
+              f"{mw(mit, 'blockers')} Blocker")
+        print(f"  ohne ({len(ohne)})            : "
+              f"{mw(ohne, 'total_minutes')} min, {mw(ohne, 'review_rounds')} Runden, "
+              f"{mw(ohne, 'blockers')} Blocker")
+        print("  n ist klein — das ist ein Hinweis, keine Aussage.")
+    elif mit or ohne:
+        print(f"  Kontextabruf            : alle {len(mit) + len(ohne)} Lieferungen "
+              f"{'MIT' if mit else 'OHNE'} — ohne Gegenstueck kein Vergleich")
     print(f"Ueber {len(done)} abgeschlossene Lieferungen:")
     print(f"  Menschenanteil          : {hum/tot*100:.0f} %" if tot else "  Menschenanteil: —")
     print(f"  Gesamtzeit              : {tot/60:.1f} h  =>  bei 14 h/Woche {tot/60/14:.1f} Wochen, "

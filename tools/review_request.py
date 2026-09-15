@@ -33,6 +33,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from project_config import Config  # noqa: E402
 import model_family as MF           # noqa: E402
+import context_index as CI          # noqa: E402
+import devos_env                     # noqa: E402
 
 MAX_FILE_BYTES = 120_000
 MAX_TOTAL_BYTES = 900_000
@@ -238,8 +240,13 @@ def main() -> int:
     ap.add_argument("--root", default=".")
     ap.add_argument("--out", default="devos/review")
     ap.add_argument("--tests", default=None)
+    ap.add_argument("--graph", choices=["auto", "on", "off"], default="auto",
+                    help="Kontexthinweise aus dem Index. 'auto' benutzt ihn, wenn einer da "
+                         "ist; 'off' schaltet ihn ab — fuer den Vergleich mit und ohne")
+    ap.add_argument("--index", default=None, help="Pfad zum Kontextindex")
     a = ap.parse_args()
 
+    devos_env.laden()
     root = str(Path(a.root).resolve())
     cfg = Config(root)
     task = read_task(Path(a.task))
@@ -297,6 +304,9 @@ def main() -> int:
         diffs[f["path"]] = d
         total += n
 
+    id_re = re.compile(cfg.id_pattern)
+    refs_vorab = sorted({m if isinstance(m, str) else m[0]
+                         for m in id_re.findall(task["raw"] + "\n" + "\n".join(diffs.values()))})
     tests = run_tests_isolated(root, head, a.tests, out)
     if tests.get("output_truncated_in_markdown"):
         omitted.append({"path": tests["output_file"],
@@ -304,9 +314,7 @@ def main() -> int:
                                f"{MD_LOG_BYTES} B; das vollstaendige Protokoll liegt als Artefakt daneben",
                         "sha256": tests["output_sha256"]})
 
-    id_re = re.compile(cfg.id_pattern)
-    refs = sorted({m if isinstance(m, str) else m[0]
-                   for m in id_re.findall(task["raw"] + "\n" + "\n".join(diffs.values()))})
+    refs = refs_vorab
     norms, norms_missing = norm_sources(root, refs, cfg)
     omitted += norms_missing
     commits = sh("git", "-C", root, "log", "--format=%h %s", f"{base}..{head}").splitlines()
@@ -325,6 +333,28 @@ def main() -> int:
                                "kann die Familientrennung nicht nachgewiesen werden und das Gate "
                                "laesst kein PASS zu"})
 
+    # Kontexthinweise. Ausdruecklich ZUSAETZLICH: Diff, Normquellen und
+    # Bestandsliste entstehen unabhaengig davon und werden davon nie gekuerzt.
+    # Ein Index, der den Prueflingsumfang bestimmen koennte, waere eine zweite
+    # Wahrheit neben dem Repo.
+    if a.graph == "off":
+        graph = {"used": False, "source": None, "rev": head, "stale": None, "hits": [],
+                 "rejected": [], "why": "mit --graph off abgeschaltet (Vergleichslauf)"}
+    else:
+        try:
+            graph = CI.hinweise(root, head, refs, cfg, a.index)
+        except Exception as ex:
+            graph = {"used": False, "source": None, "rev": head, "stale": None, "hits": [],
+                     "rejected": [], "why": f"Kontextindex nicht benutzbar: {type(ex).__name__}: {ex}"}
+    if not graph["used"] and graph.get("stale"):
+        omitted.append({"path": "<Kontextindex>",
+                        "why": f"veralteter Index nicht benutzt — {graph['why']}"})
+    if graph.get("rejected"):
+        omitted.append({"path": "<Kontexthinweise>",
+                        "why": f"{len(graph['rejected'])} Treffer des Index verworfen, weil sie "
+                               "Revision oder Fundstelle nicht nennen — ein Treffer ohne beides "
+                               "ist kein Treffer"})
+
     inv = inventory(root, head)
     if inv["truncated"]:
         omitted.append({"path": "<Bestandsliste>",
@@ -332,16 +362,16 @@ def main() -> int:
                                f"{MAX_INVENTORY} — der Reviewer sieht den Bestand unvollstaendig"})
 
     ctx = {
-        "schema_version": "1.2",
+        "schema_version": "1.3",
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "generated_by": "devos/tools/review_request.py@1.2",
+        "generated_by": "devos/tools/review_request.py@1.3",
         "project": cfg.project,
         "task": {k: task.get(k) for k in ("id", "title", "file", "sha256", "acceptance",
                                           "forbidden", "decisions", "open")},
         "range": {"base": base, "head": head, "commits": commits},
         "files_changed": files, "diff_included": sorted(diffs), "omitted": omitted,
         "referenced_ids": refs, "norm_sources": norms, "tests": tests,
-        "builder": builder, "inventory": inv,
+        "builder": builder, "inventory": inv, "graph": graph,
         "counts": {"files": len(files), "diff_bytes": total, "omitted": len(omitted), "commits": len(commits)},
     }
     (out / "review_context.json").write_text(json.dumps(ctx, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -400,6 +430,29 @@ def main() -> int:
         L += ["", "Ein Urteil, das von einem dieser Posten abhaengt, ist `INSUFFICIENT_CONTEXT`."]
     else:
         L += ["Nichts. Der Diff ist vollstaendig und das Testprotokoll ungekuerzt."]
+
+    if graph["used"] and graph["hits"]:
+        L += ["", "## Kontexthinweise (Index)", "",
+              f"*Quelle `{graph['source']}`, gebaut fuer genau diese Revision `{head[:12]}`. "
+              f"{graph['why']}.*", "",
+              "> **Das sind Zeiger, keine Belege.** Geurteilt wird am Original. Der Index",
+              "> **begrenzt den Pruefumfang nicht**: der Diff oben ist vollstaendig, die",
+              "> Bestandsliste unten nennt alles, was es gibt, und du darfst jede Datei",
+              "> nachfordern. Was hier fehlt, heisst nicht, dass es nicht existiert.", ""]
+        behauptungen = [h for h in graph["hits"] if h.get("kind") == "claim"]
+        if behauptungen:
+            L += ["**Im Text behauptete Beziehungen — unbelegt, bitte am Original pruefen:**", ""]
+            L += [f"- `{h['id']}` → `{h.get('related')}` in `{h['path']}:{h['line']}`"
+                  for h in behauptungen[:20]] + [""]
+        L += ["<details><summary>Fundstellen</summary>", "",
+              "| ID | Fundstelle | Art |", "|---|---|---|"]
+        L += [f"| `{h['id']}` | `{h['path']}:{h['line']}` | {h.get('kind', '?')} |"
+              for h in graph["hits"][:120]]
+        L += ["", "</details>", ""]
+    elif a.graph != "off":
+        L += ["", "## Kontexthinweise (Index)", "",
+              f"*Keine — {graph['why']}. Das Verfahren laeuft ohne; der Index ist eine "
+              "Erweiterung, keine Voraussetzung.*", ""]
 
     L += ["", "## Bestand im geprueften Stand", "",
           f"*{inv['count']} Dateien in `{head[:12]}`"

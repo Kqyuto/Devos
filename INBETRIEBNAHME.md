@@ -4,7 +4,10 @@ Dieses Dokument trennt drei Dinge, die sonst ineinanderlaufen: **geprüft an ech
 **geprüft gegen eine Attrappe** und **überhaupt nicht geprüft**. Die zweite Kategorie ist die
 gefährliche — sie sieht in einem grünen Testlauf genauso aus wie die erste.
 
-Stand: Eigentest `131 von 131`, `tools/reproduce_findings.py` Exit 0.
+Stand: Eigentest `155 von 155`, `tools/reproduce_findings.py` Exit 0.
+
+**Der kürzeste Weg von hier: [`START.md`](START.md).** Dieses Dokument ist die
+Begründung dahinter — was belegt ist und was nicht.
 
 ---
 
@@ -29,6 +32,9 @@ nicht gegen eine Beschreibung davon.
 | Die Quellen-Nachforderung liest aus der **Revision**, nicht aus dem Arbeitsverzeichnis | `E2E` — eine lokal manipulierte Datei erreicht den Reviewer nachweislich nicht |
 | Der Schlüssel taucht in keiner geschriebenen Datei und in keiner Ausgabe auf | `N01` |
 | Ein fremdes Projekt kann sein Paket nicht ins DevOS-Repo schreiben | `S` |
+| Der Bereitschaftstest benennt jeden fehlenden Posten samt Abhilfe | `P1`–`P10` |
+| Der Kontextindex: revisionsgebunden, veraltet = unbenutzt, begrenzt nichts | `X1`–`X9`, gegen die **echten** mahoraga-Register: 290 IDs, 384 Kanten |
+| Der Registerprüfer gegen die **echten** Register beider Repos | mahoraga grün nach einer echten Korrektur (`R-213` als auswärtige ID); fünf gemeldete „Doppeldefinitionen" waren **Fehlalarme** meines eigenen Prüfers und wurden vor dem Commit behoben |
 
 ## 2 · Was nur gegen eine Attrappe geprüft ist
 
@@ -62,9 +68,13 @@ den Fall als Task schneiden. Eine Abdeckungsprüfung, die man wegkonfigurieren k
 |---|---|---|---|
 | 1 | **Ein Reviewer-Zugang** — `DEVOS_REVIEWER_API_KEY` und ein erreichbarer Endpunkt | Ohne ihn gibt es kein zweites Urteil, und das ganze Verfahren ist eine Selbstbestätigung | `review_dispatch.py` endet mit Exit 0 statt 2 |
 | 2 | **Ein ausführender Rechner** | Die Umgebung, in der dies gebaut wurde, ist flüchtig und hat **keinen Netzzugang zu Modellanbietern**: `api.openai.com` antwortet hier `403 Forbidden` am Proxy. Ein Runner muss dort stehen, wo Schlüssel und Netz sind | Ein `run_task.py`-Lauf, der Exit 0 oder 1 liefert statt Exit 5 |
-| 3 | **Ein Builder-Zugang auf dem Runner** — `DEVOS_BUILDER_CMD`, das ein Modell nicht-interaktiv startet und Schreibrecht im Repo hat | Ohne ihn hält der Lauf nach dem Brief an; das Verfahren läuft, aber nicht allein | `O1`-Verhalten außerhalb des Eigentests |
-| 4 | **Ein Klon von mahoraga auf dem Runner mit Push-Recht** | mahoraga ist privat. Die GitHub-Verbindung allein startet keine Modellläufe | `run_task.py --root <mahoraga>` erzeugt ein Paket |
-| 5 | **Token-Preise** — `DEVOS_REVIEWER_PRICE_IN/OUT` | Ohne sie werden Token gezählt, aber das Kostenlimit **bindet nicht**. Das Werkzeug sagt das bei jedem Lauf | `spent.cost_usd` ist nicht `null` |
+| 3 | **Ein Klon von mahoraga auf dem Runner mit Push-Recht** | mahoraga ist privat. Die GitHub-Verbindung allein startet keine Modellläufe | `devos preflight --root ~/mahoraga` ist grün |
+| 4 | **Token-Preise** — `DEVOS_REVIEWER_PRICE_IN/OUT` | Ohne sie werden Token gezählt, aber das Kostenlimit **bindet nicht**. Das Werkzeug sagt das bei jedem Lauf | `spent.cost_usd` ist nicht `null` |
+
+**Nicht mehr offen, seit dieser Runde:** der Builder-Zugang (`tools/builders/claude_code.sh`
+ist gebaut und in `env.example` vorbelegt), das Testkommando für ein reines Dokumenten-Repo
+(`tools/check_registers.py` arbeitet aus `.devos.json` heraus, ohne Domänenwissen), und die
+Frage, wie man den Zustand überhaupt feststellt (`devos preflight`).
 
 **Was ausdrücklich nicht fehlt:** Zugangsdaten gehören in die Laufzeitumgebung des Runners, nicht in
 eines der beiden Repositories. Beide `.gitignore` nehmen Laufmaterial aus, und `review_request.py`
@@ -101,26 +111,44 @@ Laufzuständen. Von Hand bleiben **zwei Sorten Zeilen** — und beide bewusst:
 Nach drei vollständig gemessenen Lieferungen rechnet `delivery_metrics.py` Menschenanteil und
 Durchsatz gegen 6 – 14 h/Woche. Bei weniger als drei sagt es das und urteilt nicht.
 
-## 5 · Graphify — bewusst nicht angefasst
+## 5 · Graphify — die Stelle ist gebaut, das Produkt ist offen
 
-Nichts in diesem Stand hängt an Graphify, und nichts ist darauf vorbereitet worden. Das ist
-Absicht: eine Kontextsuche ist eine Verbesserung eines Ablaufs, der erst einmal laufen muss.
+**Ein Graphify-Repository existiert in diesem Konto nicht** (geprüft: `Devos`, `mahoraga`,
+`Trading-Os`, `kqyutos-os`, `Assay`). Welches konkrete Werkzeug gemeint ist, ist damit
+weiterhin **unverifiziert** — und das ist die eine Frage, die ich nicht selbst beantworten
+kann.
 
-Vor einer Integration zu klären, in dieser Reihenfolge:
+Gebaut ist deshalb beides: die **Stelle**, an der Graphify eintritt, und eine **eingebaute
+Kontextsuche**, die sie heute schon ausfüllt. Der Ablauf braucht auf keiner Stufe ein
+externes Produkt.
 
-1. **Welches Graphify ist gemeint** und was es tatsächlich kann — das ist bisher nicht verifiziert.
-2. Ob jeder Treffer **Revision und Originalstelle** nennt. Ein Treffer ohne Revision ist im
-   Verfahren wertlos: das Gate bindet alles an SHAs.
-3. Ob ein **veralteter oder unvollständiger Index erkennbar** ist. Ein Index, der still veraltet,
-   ist genau die zweite, nicht auditierbare Wahrheit, die das Projekt sonst überall vermeidet.
-4. Vergleichbare Tasks **mit und ohne** Graphabruf, gemessen mit derselben Metrik wie oben —
-   Indexaufbau und -pflege in den Kosten enthalten.
+`tools/context_index.py` — revisionsgebunden aus `git show <rev>:<pfad>` gebaut, nie aus dem
+Arbeitsverzeichnis. Gegen die echten mahoraga-Register: 290 IDs, 384 Kanten, 23 von 24
+Dateien indiziert, die eine ausgelassene benannt.
 
-Zwei Regeln gelten unabhängig vom Ergebnis:
+Die fünf Regeln aus dem Auftrag sind Code, nicht Absicht — mit der jeweiligen Probe:
 
-- **Der Graph darf den Prüfumfang nicht begrenzen.** Die Bestandsliste im Paket und die
-  Quellen-Nachforderung sind genau dafür da, dass der Reviewer über jede Vorauswahl hinausgreifen
-  kann — auch über die eines Graphen.
-- **Eine Builder-Beziehung wie `satisfies → AC-1` ist eine Behauptung, kein Nachweis.** Sie gehört,
-  wenn sie ungeprüft mitgeliefert wird, nach `unproven_claims` — dorthin, wo das Schema
-  Behauptungen ohne Beleg schon heute hinstellt.
+| Regel | Wie sie durchgesetzt wird | Probe |
+|---|---|---|
+| Jeder Treffer nennt Revision und Originalstelle | Treffer ohne `rev`/`path`/`line` werden **verworfen**, gezählt und in `omitted` gemeldet — auch die eines externen Anbieters | `X1`, `X3` |
+| Treffer aus einer **anderen** Revision | verworfen, nicht benutzt | `X4` |
+| Veralteter Index erkennbar | `status` vergleicht Indexrevision mit der geprüften und nennt die Dateien dazwischen; ein veralteter Index wird **nicht benutzt** und steht in der Weglass-Liste | `X2` |
+| Der Graph begrenzt den Prüfumfang nicht | Diff, Bestandsliste und Nachforderungsrecht entstehen unabhängig; eine Probe vergleicht `diff_included` mit und ohne Index | `X7` |
+| `satisfies → AC-1` ist eine Behauptung | Das Werkzeug leitet **selbst nie** eine Beziehung ab. Steht so etwas im Text, wird der Treffer als `claim` geführt und im Paket als *unbelegt* ausgewiesen | `X1` |
+| Fällt er weg, läuft alles weiter | Kein Index, kaputter Anbieter, Anbieter meldet sich veraltet — das Paket entsteht unverändert | `X5`, `X9` |
+
+**Der Anbietervertrag** steht in `tools/context_index.py`: stdin
+`{"op":"query","rev":…,"ids":[…],"depth":…}`, stdout
+`{"source":…,"built_for_rev":…,"stale":…,"hits":[{"id","path","line","rev"}]}`.
+Ein echtes Graphify tritt über `DEVOS_GRAPH_CMD` an diese Stelle — ohne eine Zeile im
+Verfahren zu ändern.
+
+**Die Messung mit und ohne** ist vorbereitet: `--graph off` erzeugt den Vergleichslauf,
+`run_state.json` hält je Runde fest, ob Hinweise benutzt wurden, `delivery_metrics` stellt
+beide Gruppen nebeneinander — und sagt „n ist klein, das ist ein Hinweis, keine Aussage",
+solange es so ist. Der Indexaufbau läuft in jedem Lauf mit und steckt damit in der
+gemessenen Durchlaufzeit.
+
+**Was weiterhin offen ist:** ob das konkret gemeinte Graphify mehr kann als dieser
+eingebaute Index — und ob sich der Unterschied in den gemessenen Größen zeigt. Das
+entscheidet der Vergleich über 3 – 5 Tasks, nicht eine Meinung.
