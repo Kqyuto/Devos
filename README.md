@@ -52,10 +52,11 @@ abhängt, wird in der Praxis optional, und ein optionales Gate ist keins.
 ## Einrichten
 
 ```bash
-git clone <dieses-repo> ~/devos
+git clone --branch codex/devos-gate-evidence https://github.com/Kqyuto/Devos ~/devos
+cd ~/devos
 export PATH="$HOME/devos/bin:$PATH"
 
-devos selftest                           # 176 Proben, Exit 1 bei Fehlschlag
+devos selftest                           # 203 Proben, Exit 1 bei Fehlschlag
 
 mkdir -p ~/.config/devos
 cp ~/devos/templates/env.example ~/.config/devos/env
@@ -249,7 +250,11 @@ darunter, dass die Familientrennung selbst nie überprüft wurde. Alle sind in
 [`BEFUNDE.md`](BEFUNDE.md) mit Reproduktion und Korrektur festgehalten;
 `tools/reproduce_findings.py` führt sie am laufenden Werkzeug vor.
 
-**`G06` ist offen** und ausdrücklich der erste Pilottask
-([`work/tasks/TASK-001-devos-gate-korrektur.md`](work/tasks/TASK-001-devos-gate-korrektur.md)).
-Ihn vom selben Builder beheben zu lassen, der ihn gefunden hat, wäre wieder eine
-Selbstbestätigung — genau das, wogegen dieses Werkzeug gebaut ist.
+**`G06` und `G07` sind lokal korrigiert; das unabhängige Review steht aus.** Der erste Pilottask
+([`work/tasks/TASK-001-devos-gate-korrektur.md`](work/tasks/TASK-001-devos-gate-korrektur.md))
+prüft die vorhandene Korrektur. Provenienzschema 1.2 bindet Paket, Kontext und Ergebnis über
+volle SHA256-Hashes; Acceptance-Punkte müssen nach Formatnormalisierung vollständig und
+eindeutig passen. Alte oder beschädigte Provenienz zählt nicht als gemessener Nachweis.
+Der bestehende Rückfall auf ausdrücklich ausgewiesene Reviewer-Selbstauskunft bleibt erhalten.
+Hashes authentisieren keinen Modellanbieter. Den zum Korrekturbranch passenden Einstieg
+und die Reviewer-Rollen beschreibt [`START.md`](START.md); `main` enthält noch den älteren Stand.

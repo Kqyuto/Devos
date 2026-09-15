@@ -11,6 +11,8 @@ der Adversarial Reviewer gefunden hat. Sie sind Regressionsproben, keine Deko.
 from __future__ import annotations
 
 import json
+import copy
+import hashlib
 import os
 import subprocess
 import sys
@@ -57,6 +59,15 @@ def run_gate(result: dict, context: dict | None = None, ctx_path: str | None = N
             cmd += ["--context", str(cp)]
         prov = ok_dispatch() if dispatch is SENTINEL else dispatch
         if prov is not None:
+            prov = copy.deepcopy(prov)
+            packet = Path(td) / "REVIEW-REQUEST.md"
+            packet.write_text("Synthetic selftest packet\n", encoding="utf-8")
+            bindings = {"request_sha256": packet, "result_sha256": rp}
+            if "--context" in cmd:
+                bindings["context_sha256"] = Path(cmd[cmd.index("--context") + 1])
+            for key, path in bindings.items():
+                if prov.get(key) == "<fixture>" and path.is_file():
+                    prov[key] = hashlib.sha256(path.read_bytes()).hexdigest()
             dp = Path(td) / "d.json"
             dp.write_text(json.dumps(prov), encoding="utf-8")
             cmd += ["--dispatch", str(dp)]
@@ -102,13 +113,22 @@ def ok_context(**over) -> dict:
 
 
 def ok_dispatch(**over) -> dict:
-    d = {"schema_version": "1.1", "model": "gpt-5",
+    d = {"schema_version": "1.2", "model": "gpt-5",
          "reviewer": {"model": "gpt-5", "family": "openai", "declared_via": "Namenstabelle"},
          "builder": {"model": "claude-opus-5", "family": "anthropic", "declared_via": "selftest"},
          "independence": {"separated": True, "builder_family": "anthropic",
                           "reviewer_family": "openai", "why": "verschieden"},
-         "ok": True}
+         "ok": True,
+         "started_at": "2026-09-15T00:00:00+00:00", "finished_at": "2026-09-15T00:00:01+00:00",
+         "endpoint_host": "127.0.0.1", "request_sha256": "<fixture>",
+         "context_sha256": "<fixture>", "result_sha256": "<fixture>",
+         "request_bytes": len(b"Synthetic selftest packet\n"), "calls": 1,
+         "attempts": [{"runde": 1, "response_sha256": "a" * 64, "bytes": 1,
+                       "schema_errors": [], "usage": {}}], "usage_total": {},
+         "cost_usd": None, "cost_basis": "fixture", "source_requests": [], "coverage_repair": False}
     d.update(over)
+    if "reviewer" in over and "model" not in over:
+        d["model"] = d["reviewer"].get("model")
     return d
 
 
@@ -333,6 +353,34 @@ def e2e_proben() -> None:
                             "--context", str(out / "review_context.json"),
                             "--dispatch", str(out / "review_dispatch.json"), "--json"],
                            capture_output=True, text=True)
+        original_gate = json.loads(p.stdout)
+        check("G06 E2E der echte Transport schreibt einen gueltigen gebundenen Nachweis",
+              p.returncode == 0 and not original_gate.get("dispatch_errors")
+              and original_gate["independence"]["evidence"] == "Transport-Provenienz (gemessen)")
+        for filename, hash_key in (("REVIEW-REQUEST.md", "request_sha256"),
+                                   ("review_context.json", "context_sha256"),
+                                   ("review_result.json", "result_sha256")):
+            artifact = out / filename
+            original = artifact.read_bytes()
+            try:
+                # JSON bleibt gueltig; nur die Bindung kann diese Aenderung erkennen.
+                artifact.write_bytes(original + b"\n")
+                tampered = subprocess.run(p.args, capture_output=True, text=True)
+                error = json.loads(tampered.stdout)
+                check("G06 E2E nachtraeglich veraendert: " + filename,
+                      tampered.returncode == 2 and hash_key in " ".join(error.get("dispatch_errors", [])))
+            finally:
+                artifact.write_bytes(original)
+        packet = out / "REVIEW-REQUEST.md"
+        moved = out / "anderes-paket.md"
+        packet.rename(moved)
+        try:
+            missing = subprocess.run(p.args, capture_output=True, text=True)
+            explicit = subprocess.run(p.args + ["--request", str(moved)], capture_output=True, text=True)
+            check("G06 E2E fehlendes Paket blockiert, expliziter richtiger Pfad funktioniert",
+                  missing.returncode == 2 and explicit.returncode == 0)
+        finally:
+            moved.rename(packet)
         # Abdeckungs-Reparatur: ein Reviewer, der Punkte uebergeht, wird EINMAL
         # gefragt — nicht durchgewunken und nicht endlos.
         halb = antwort("PASS", [{"item": acc[0], "verdict": "met"}])
@@ -1081,6 +1129,61 @@ def messproben() -> None:
           json.dumps(zeilen[-1])[:160])
 
 
+def gate_evidence_proben() -> None:
+    cases = [
+        ("Minimaldatei", {"reviewer": {"model": "gpt-5", "family": "openai"}}),
+        ("alte Version", ok_dispatch(schema_version="1.1")),
+        ("falscher Typ", ok_dispatch(ok="true")),
+        ("Transport fehlgeschlagen", ok_dispatch(ok=False)),
+        ("keine Versuche", ok_dispatch(attempts=[], calls=0)),
+        ("Anzahl widerspruechlich", ok_dispatch(calls=2)),
+        ("letzter Versuch ungueltig", ok_dispatch(attempts=[
+            {"runde": 1, "response_sha256": "a" * 64, "bytes": 1,
+             "schema_errors": ["ungueltige Antwort"], "usage": {}}])),
+        ("Endpunkt leer", ok_dispatch(endpoint_host="")),
+        ("Zeitfolge falsch", ok_dispatch(finished_at="2026-09-14T00:00:00+00:00")),
+        ("Modell widerspruechlich", ok_dispatch(model="anderes-modell")),
+        ("Builder widerspruechlich", ok_dispatch(builder={
+            "model": "anderer-builder", "family": "anthropic", "declared_via": "selftest"})),
+        ("Paketlaenge falsch", ok_dispatch(request_bytes=0)),
+        ("Hash abgekuerzt", ok_dispatch(request_sha256="a" * 16)),
+    ]
+    cases += [(key + " vertauscht", ok_dispatch(**{key: "0" * 64}))
+              for key in ("request_sha256", "context_sha256", "result_sha256")]
+    for name, prov in cases:
+        code, out = run_gate(base_result(), ok_context(), dispatch=prov)
+        check("G06 " + name + " zaehlt nicht als gemessener Nachweis",
+              code == 2 and bool(out.get("dispatch_errors"))
+              and out.get("independence", {}).get("evidence") == "kein Nachweis",
+              json.dumps(out, ensure_ascii=False)[:240])
+
+    r = base_result(reviewer={"model": "gpt-5", "model_family": "openai"})
+    code, out = run_gate(r, ok_context(), dispatch=cases[0][1])
+    check("G06 ungueltige Provenienz: Selbstauskunft bleibt sichtbar und ungemessen",
+          code == 0 and bool(out.get("dispatch_errors"))
+          and out.get("independence", {}).get("evidence") == "Selbstauskunft des Reviewers (nicht gemessen)")
+
+    required = ["Der Testlauf endet mit Exit 0 bei Erfolg",
+                "Der Testlauf endet mit Exit 1 bei einem Fehler"]
+    for name, wanted, reviewed in [
+        ("gemeinsamer Satzanfang", required, ["Der Testlauf endet"]),
+        ("abgeschnittene Einschraenkung", required[:1], ["Der Testlauf endet mit Exit 0"]),
+        ("doppelte Bewertung", required[:1], [required[0], required[0]]),
+        ("doppelte Forderung", [required[0], required[0]], required[:1]),
+    ]:
+        ctx = ok_context(); ctx["task"]["acceptance"] = wanted
+        r = base_result()
+        r["reviewed"]["acceptance_items"] = [{"item": x, "verdict": "met"} for x in reviewed]
+        code, out = run_gate(r, ctx)
+        check("G07 " + name + " erfuellt keine vollstaendige eindeutige Abdeckung",
+              code == 2 and out.get("acceptance_uncovered") == wanted
+              and out.get("acceptance_unbound") == reviewed)
+    ctx = ok_context(); ctx["task"]["acceptance"] = required
+    r["reviewed"]["acceptance_items"] = [{"item": x, "verdict": "met"} for x in reversed(required)]
+    code, out = run_gate(r, ctx)
+    check("G07 vollstaendige eindeutige Punkte duerfen die Reihenfolge wechseln", code == 0)
+
+
 def main() -> int:
     # Hermetisch: eine vorhandene ~/.config/devos/env wuerde sonst Schluessel und
     # Modellnamen in jede Probe tragen. Ein Eigentest, der je nach Rechner andere
@@ -1447,6 +1550,9 @@ def main() -> int:
         check("kaputte Logzeile ist ein Befund, kein Absturz",
               p.returncode == 1 and "BEFUND" in p.stderr and "Traceback" not in p.stderr,
               f"Exit {p.returncode} {p.stderr.strip()[:120]}")
+
+    print("\nG06/G07 — Transportbindung und eindeutige Acceptance:")
+    gate_evidence_proben()
 
     print("\nN01 — Transport: der Mensch traegt das Paket nicht mehr:")
     transport_proben()

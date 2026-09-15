@@ -36,9 +36,12 @@ Exit-Codes:  0 MERGEABLE_PENDING_HUMAN · 1 CHANGES_REQUIRED
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import sys
+from collections import Counter
+from datetime import datetime
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -48,6 +51,7 @@ import model_family as MF            # noqa: E402
 SCHEMA_DIR = Path(__file__).resolve().parent.parent / "schema"
 SCHEMA = SCHEMA_DIR / "review_result.schema.json"
 CTX_SCHEMA = SCHEMA_DIR / "review_context.schema.json"
+DISPATCH_SCHEMA = SCHEMA_DIR / "review_dispatch.schema.json"
 
 RANK = {"PASS": 0, "CHANGES_REQUIRED": 1, "BLOCKED": 2, "INDEPENDENCE_UNPROVEN": 3,
         "CONFLICT": 4, "INSUFFICIENT_CONTEXT": 5}
@@ -116,25 +120,74 @@ def _norm(s: str) -> str:
 def acceptance_abdeckung(gefordert: list[str], bewertet: list[str]) -> tuple[list[str], list[str]]:
     """(nicht bewertete Forderungen, Bewertungen ohne Entsprechung).
 
-    Der Reviewer soll den Wortlaut uebernehmen; die Anweisung im Transport sagt
-    das ausdruecklich. Damit eine Umformulierung aber nicht sofort das ganze
-    Verfahren blockiert, gilt auch Enthaltensein als Treffer — ab einer Laenge,
-    bei der ein Zufallstreffer ausgeschlossen ist.
+    Vollstaendige normalisierte Texte muessen eindeutig eins zu eins passen.
+    Ein gemeinsamer Satzanfang bewertet keine seiner Fortsetzungen. Doppelte
+    Forderungen oder Bewertungen sind mehrdeutig und werden ausgewiesen.
     """
     gn = [(x, _norm(x)) for x in gefordert]
     bn = [(x, _norm(x)) for x in bewertet]
 
-    def trifft(a: str, b: str) -> bool:
-        if not a or not b:
-            return False
-        if a == b:
-            return True
-        kurz = min(a, b, key=len)
-        return len(kurz) >= 12 and (a in b or b in a)
-
-    offen = [roh for roh, n in gn if not any(trifft(n, m) for _, m in bn)]
-    lose = [roh for roh, m in bn if not any(trifft(n, m) for _, n in gn)]
+    gc, bc = Counter(n for _, n in gn), Counter(n for _, n in bn)
+    offen = [roh for roh, n in gn if not n or gc[n] != 1 or bc[n] != 1]
+    lose = [roh for roh, n in bn if not n or gc[n] != 1 or bc[n] != 1]
     return offen, lose
+
+
+def load_dispatch(pfad: str | None, request: Path, context: str | None,
+                  result: Path, ctx: dict | None) -> tuple[dict | None, list[str]]:
+    """Prueft den lokalen Transportdatensatz und seine drei Artefaktbindungen.
+
+    Hashes erkennen vertauschte/veraenderte Dateien. Sie authentisieren keinen
+    Modellanbieter und schuetzen nicht vor gemeinsam gefaelschten Artefakten.
+    Alte oder fehlerhafte Datensaetze sind kein gemessener Nachweis (G06).
+    """
+    if not pfad:
+        return None, []
+    try:
+        prov = json.loads(Path(pfad).read_text(encoding="utf-8"))
+        schema = json.loads(DISPATCH_SCHEMA.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as ex:
+        return None, [f"Transport-Provenienz nicht lesbar: {ex}"]
+    errors = J.validate(prov, schema)
+    if errors:
+        return None, ["Transport-Provenienz verletzt Schema: " + "; ".join(errors[:4])]
+    if prov["ok"] is not True:
+        errors.append("Transport-Provenienz: ok ist nicht true")
+    attempts = prov["attempts"]
+    if not attempts or prov["calls"] != len(attempts):
+        errors.append("Transport-Provenienz: calls/attempts fehlen oder widersprechen sich")
+    elif attempts[-1]["schema_errors"] or [a["runde"] for a in attempts] != list(range(1, len(attempts) + 1)):
+        errors.append("Transport-Provenienz: kein erfolgreicher letzter Versuch oder ungueltige Reihenfolge")
+    for key in ("endpoint_host", "model", "started_at", "finished_at"):
+        if not prov[key].strip():
+            errors.append(f"Transport-Provenienz: {key} ist leer")
+    try:
+        start = datetime.fromisoformat(prov["started_at"].replace("Z", "+00:00"))
+        end = datetime.fromisoformat(prov["finished_at"].replace("Z", "+00:00"))
+        if start.utcoffset() is None or end.utcoffset() is None or end < start:
+            raise ValueError("Zeitfolge oder Zeitzone fehlt")
+    except (ValueError, TypeError):
+        errors.append("Transport-Provenienz: ungueltige Zeitangaben")
+    if prov["model"] != prov["reviewer"].get("model"):
+        errors.append("Transport-Provenienz: model und reviewer.model widersprechen sich")
+    if ctx is not None and prov["builder"] != ctx.get("builder"):
+        errors.append("Transport-Provenienz: Builder stimmt nicht mit dem Kontext ueberein")
+    for key, path in (("request_sha256", request),
+                      ("context_sha256", Path(context) if context else None),
+                      ("result_sha256", result)):
+        expected = prov.get(key)
+        if not isinstance(expected, str) or not re.fullmatch(r"[0-9a-f]{64}", expected):
+            errors.append(f"Transport-Provenienz: {key} fehlt oder ist kein voller SHA256")
+            continue
+        try:
+            content = path.read_bytes() if path is not None else None
+        except OSError:
+            content = None
+        if content is None or hashlib.sha256(content).hexdigest() != expected:
+            errors.append(f"Transport-Provenienz: {key} passt nicht zum vorgelegten Artefakt")
+        elif key == "request_sha256" and prov["request_bytes"] != len(content):
+            errors.append("Transport-Provenienz: request_bytes passt nicht zum Paket")
+    return (None if errors else prov), errors
 
 
 def unabhaengigkeit(ctx: dict | None, r: dict, prov: dict | None) -> dict:
@@ -294,6 +347,8 @@ def main() -> int:
                     help="review_context.json der Lieferung — ohne sie ist PASS unerreichbar")
     ap.add_argument("--dispatch", default=None,
                     help="review_dispatch.json — der gemessene Nachweis der Familientrennung")
+    ap.add_argument("--request", default=None,
+                    help="zugehoeriges Paket; Standard: REVIEW-REQUEST.md neben dem Ergebnis")
     ap.add_argument("--json", action="store_true")
     a = ap.parse_args()
 
@@ -316,17 +371,11 @@ def main() -> int:
 
     ctx, ctx_problem = load_context(a.context)
 
-    prov = None
-    if a.dispatch and Path(a.dispatch).exists():
-        try:
-            prov = json.loads(Path(a.dispatch).read_text(encoding="utf-8"))
-        except Exception as ex:
-            prov = None
-            ctx_problem = (ctx_problem + "; " if ctx_problem else "") + f"--dispatch nicht lesbar: {ex}"
-        if prov is not None and not isinstance(prov, dict):
-            prov = None
+    request = Path(a.request) if a.request else Path(a.result).parent / "REVIEW-REQUEST.md"
+    prov, prov_errors = load_dispatch(a.dispatch, request, a.context, Path(a.result), ctx)
 
     verdict, code, log, detail = gate(r, ctx, ctx_problem, prov)
+    log.extend(prov_errors)
     items = r["reviewed"].get("acceptance_items") or []
     payload = {
         "gate": verdict, "exit_code": code, "declared_status": r["status"],
@@ -339,6 +388,7 @@ def main() -> int:
         "acceptance_uncovered": detail.get("acceptance_uncovered", []),
         "acceptance_unbound": detail.get("acceptance_unbound", []),
         "independence": detail.get("independence"),
+        "dispatch_errors": prov_errors,
     }
     if a.json:
         print(json.dumps(payload, ensure_ascii=False, indent=2))

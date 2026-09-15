@@ -157,10 +157,10 @@ hätte.
 
 ---
 
-## G06 — die Provenienz wird geglaubt, nicht geprüft *(OFFEN — der Pilottask)*
+## G06 — die Provenienz wird geglaubt, nicht geprüft *(lokal korrigiert, Review ausstehend)*
 
-Bei der Arbeit an G04 gefunden und **absichtlich nicht behoben**: das Gate liest den Nachweis der
-Familientrennung aus `review_dispatch.json` und prüft diese Datei selbst gegen nichts.
+Bei der Arbeit an G04 gefunden und zunächst als Pilottask zurückgestellt: das Gate las den
+Nachweis der Familientrennung aus `review_dispatch.json`, ohne die Datei selbst zu prüfen.
 
 Vorgeführt am Stand `65e869e` — die vollständige Datei lautet:
 
@@ -174,27 +174,45 @@ sie als *„Transport-Provenienz (gemessen)"* und antwortet **Exit 0, `MERGEABLE
 Dieselbe Fehlerklasse wie G01, nur an der empfindlichsten Stelle: es geht um den Beleg der
 **Gegenmaßnahme selbst**.
 
-**Warum offen.** G06 ist der erste Pilottask des Werkzeugs
-(`work/tasks/TASK-001-devos-gate-korrektur.md`). Ihn jetzt vom selben Builder beheben zu lassen,
-der ihn gefunden hat, würde wieder eine Selbstbestätigung erzeugen — und das Werkzeug um seinen
-ersten echten Durchlauf bringen. Er ist klein, von außen prüfbar und betrifft genau das, worauf das
-Verfahren beruht: der richtige erste Gegenstand.
+**Korrektur.** Provenienzschema 1.2, erfolgreicher letzter Versuch, stimmige Aufrufanzahl,
+Zeitfolge und Modell-/Builder-Angaben werden geprüft. Volle SHA256-Hashes binden die Provenienz
+an Paket, Kontext und Ergebnis. Das Paket liegt standardmäßig neben dem Ergebnis unter
+`REVIEW-REQUEST.md`; bei anderem Speicherort bekommt das Gate `--request <pfad>`.
+Alte Versionen, `ok: false`, fehlende Versuche und abweichende Artefakte zählen nicht als
+gemessener Nachweis. Der Grund steht in `dispatch_errors` und in der lesbaren Gate-Ausgabe.
+Die ursprüngliche Minimaldatei erzeugt ohne Reviewer-Selbstauskunft nun Exit 2.
 
-**Was er bis dahin bedeutet.** Wer `review_dispatch.json` von Hand schreiben oder ändern kann, kann
-ein `PASS` erzeugen. Das ist dieselbe Zugriffsebene, auf der man auch `review_result.json` ändern
-könnte — es macht die Lücke nicht harmloser, aber es setzt sie ins Verhältnis: sie schützt nicht
-gegen einen Angreifer mit Schreibrecht, sie schützt gegen ein **Versehen**, und genau dagegen
-schützt sie derzeit nicht.
+**Verbleibende Grenze.** Der bestehende Rückfall auf Reviewer-Selbstauskunft bleibt möglich und
+wird als *nicht gemessen* ausgewiesen. Hashes erkennen vertauschte oder veränderte Dateien;
+sie authentisieren keinen Anbieter und schützen nicht vor gemeinsam gefälschten Artefakten.
+Der Pilot prüft nun diese implementierte Korrektur. Ihr Builder ist Codex/OpenAI; ein Reviewer
+derselben Familie wäre für diese Lieferung kein unabhängiges Review.
+
+---
+
+## G07 — ein gemeinsamer Satzanfang ersetzt vollständige Acceptance-Punkte *(lokal korrigiert)*
+
+Am Basisstand `c7727bb5` zählt die Bewertung `Der Testlauf endet` als Abdeckung für beide
+Forderungen `Der Testlauf endet mit Exit 0 bei Erfolg` und
+`Der Testlauf endet mit Exit 1 bei einem Fehler`. Die Teilzeichenkettenprüfung lässt die
+entscheidenden Bedingungen weg und erzeugt dennoch Exit 0.
+
+**Korrektur.** Nach der vorhandenen Formatnormalisierung müssen vollständige Texte eindeutig
+eins zu eins passen. Verkürzungen und doppelte Forderungen/Bewertungen werden als fehlende
+oder ungebundene Abdeckung benannt. Unterschiedliche Reihenfolge bleibt erlaubt.
+`tools/reproduce_findings.py` reproduziert G06 und G07 mit erwarteten Gründen und Exit-Codes;
+die zusätzlichen Eigentests prüfen auch echte Transportartefakte nach lokaler Veränderung.
 
 ---
 
 ## Was diese Korrekturen nicht sind
 
-Ein grüner Eigentest ist kein unabhängiges Review. Alles oben ist vom **Builder** geschrieben und
-vom Builder geprüft — dieselbe Interpretationslogik, gegen die das ganze Werkzeug gebaut ist. Die
+Ein grüner Eigentest ist kein unabhängiges Review. Die jeweilige Korrektur ist vom **Builder**
+geschrieben und lokal geprüft — dieselbe Interpretationslogik, gegen die das Werkzeug gebaut ist. Die
 Proben zeigen, dass der *vorgeführte* Fall nicht mehr durchgeht. Sie zeigen nicht, dass es keinen
 benachbarten Fall gibt, an den niemand gedacht hat.
 
 Der erste echte Pilottask dieses Werkzeugs ist deshalb: **diese Korrekturen von einem Reviewer der
 anderen Familie prüfen lassen** (`work/tasks/TASK-001-devos-gate-korrektur.md`). Bis das geschehen
-ist, gilt für G01–G05 dasselbe wie für jede andere Lieferung — belegt, aber nicht unabhängig geprüft.
+ist, gilt für diese Korrekturen dasselbe wie für jede andere Lieferung — lokal belegt, aber nicht
+unabhängig abgenommen.
